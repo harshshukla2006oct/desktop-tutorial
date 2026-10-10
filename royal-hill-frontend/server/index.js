@@ -7,6 +7,7 @@ const { Pool } = require("pg");
 const app = express();
 const port = Number(process.env.PORT || 5000);
 const sessionCookie = "royal_hill_admin";
+const customerSessionCookie = "royal_hill_customer";
 const sessionLifetimeSeconds = 8 * 60 * 60;
 const rateBuckets = new Map();
 
@@ -98,6 +99,78 @@ function readSessionToken(req) {
   }
 }
 
+
+function createCustomerSessionToken(customerId, phone) {
+  const payload = Buffer.from(JSON.stringify({
+    role: "customer",
+    customerId,
+    phone,
+    exp: Math.floor(Date.now() / 1000) + sessionLifetimeSeconds,
+  })).toString("base64url");
+  const signature = crypto.createHmac("sha256", process.env.SESSION_SECRET).update(payload).digest("base64url");
+  return payload + "." + signature;
+}
+
+function readCustomerSessionToken(req) {
+  const cookie = req.headers.cookie || "";
+  const tokenPair = cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith(customerSessionCookie + "="));
+  if (!tokenPair) return null;
+  try {
+    const token = decodeURIComponent(tokenPair.slice(customerSessionCookie.length + 1));
+    const [payload, signature] = token.split(".");
+    if (!payload || !signature) return null;
+    const expected = crypto.createHmac("sha256", process.env.SESSION_SECRET).update(payload).digest();
+    const actual = Buffer.from(signature, "base64url");
+    if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return null;
+    const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (session.role !== "customer" || !Number.isSafeInteger(session.customerId) || session.exp <= Math.floor(Date.now() / 1000)) return null;
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+function requireCustomer(req, res, next) {
+  const session = readCustomerSessionToken(req);
+  if (!session) return res.status(401).json({ error: "Sign in with your verified mobile number." });
+  req.customerSession = session;
+  return next();
+}
+
+function validIndianMobile(phone) {
+  return typeof phone === "string" && /^[6-9]\d{9}$/.test(phone);
+}
+
+function twilioVerifyConfiguration() {
+  return process.env.TWILIO_API_KEY && process.env.TWILIO_API_SECRET && process.env.TWILIO_VERIFY_SERVICE_SID;
+}
+
+async function callTwilioVerify(action, values) {
+  const serviceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
+  const credentials = Buffer.from(process.env.TWILIO_API_KEY + ":" + process.env.TWILIO_API_SECRET).toString("base64");
+  const response = await fetch("https://verify.twilio.com/v2/Services/" + encodeURIComponent(serviceSid) + "/" + action, {
+    method: "POST",
+    headers: {
+      Authorization: "Basic " + credentials,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams(values),
+  });
+  let body = {};
+  try { body = await response.json(); } catch { body = {}; }
+  return { ok: response.ok, status: response.status, body };
+}
+
+function setCustomerCookie(res, token) {
+  res.cookie(customerSessionCookie, token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    maxAge: sessionLifetimeSeconds * 1000,
+    path: "/",
+  });
+}
+
 function requireAdmin(req, res, next) {
   if (readSessionToken(req)) return next();
   return res.status(401).json({ error: "Sign in to view customer entries." });
@@ -153,6 +226,238 @@ function calculateSubscriptionItem(planId) {
   };
 }
 
+
+app.post("/api/auth/send-otp", async (req, res) => {
+  const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  if (!validIndianMobile(phone)) return res.status(400).json({ error: "Enter a valid 10-digit Indian mobile number." });
+  if (rateLimit("otp-send-ip:" + req.ip, 10, 60 * 60 * 1000) || rateLimit("otp-send-phone:" + phone, 3, 15 * 60 * 1000)) {
+    return res.status(429).json({ error: "Too many code requests. Wait before trying again." });
+  }
+  if (!twilioVerifyConfiguration()) {
+    return res.status(503).json({ error: "Mobile OTP delivery is not configured yet. Please try again later." });
+  }
+  try {
+    const result = await callTwilioVerify("Verifications", { To: "+91" + phone, Channel: "sms" });
+    if (!result.ok) {
+      console.error("OTP provider rejected a send request:", result.body.code || result.status);
+      return res.status(502).json({ error: "We could not send a code to that number. Check the number or try again later." });
+    }
+    return res.json({ sent: true, message: "A verification code was sent to your mobile." });
+  } catch (error) {
+    console.error("OTP provider could not be reached:", error.message);
+    return res.status(502).json({ error: "Mobile verification is temporarily unavailable. Please try again." });
+  }
+});
+
+app.post("/api/auth/verify-otp", async (req, res) => {
+  const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+  if (!validIndianMobile(phone)) return res.status(400).json({ error: "Enter a valid 10-digit Indian mobile number." });
+  if (!/^\d{4,10}$/.test(code)) return res.status(400).json({ error: "Enter the verification code from your SMS." });
+  if (rateLimit("otp-check-ip:" + req.ip, 20, 60 * 60 * 1000) || rateLimit("otp-check-phone:" + phone, 8, 15 * 60 * 1000)) {
+    return res.status(429).json({ error: "Too many verification attempts. Wait before trying again." });
+  }
+  if (!twilioVerifyConfiguration()) {
+    return res.status(503).json({ error: "Mobile OTP delivery is not configured yet. Please try again later." });
+  }
+  try {
+    const verification = await callTwilioVerify("VerificationCheck", { To: "+91" + phone, Code: code });
+    if (!verification.ok || verification.body.status !== "approved") {
+      return res.status(400).json({ error: "That code is invalid or expired. Request a new code and try again." });
+    }
+    const saved = await pool.query(
+      "INSERT INTO customer_accounts (phone) VALUES ($1) " +
+      "ON CONFLICT (phone) DO UPDATE SET updated_at = NOW() " +
+      "RETURNING id, BTRIM(phone) AS phone, COALESCE(full_name, '') AS name, COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin",
+      [phone],
+    );
+    const account = saved.rows[0];
+    await pool.query(
+      "UPDATE customer_orders SET customer_id = $1 WHERE BTRIM(phone) = $2 AND customer_id IS NULL",
+      [account.id, phone],
+    );
+    setCustomerCookie(res, createCustomerSessionToken(Number(account.id), phone));
+    return res.json({ authenticated: true, profile: account });
+  } catch (error) {
+    console.error("Customer sign-in could not be completed:", error.message);
+    return res.status(500).json({ error: "We could not finish signing you in. Please try again." });
+  }
+});
+
+app.post("/api/auth/logout", (_req, res) => {
+  res.clearCookie(customerSessionCookie, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/",
+  });
+  return res.json({ authenticated: false });
+});
+
+app.get("/api/account/session", requireCustomer, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, BTRIM(phone) AS phone, COALESCE(full_name, '') AS name, " +
+      "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin " +
+      "FROM customer_accounts WHERE id = $1",
+      [req.customerSession.customerId],
+    );
+    if (!result.rowCount) return res.status(401).json({ error: "Your account could not be found. Please sign in again." });
+    return res.json({ authenticated: true, profile: result.rows[0] });
+  } catch (error) {
+    console.error("Customer account could not be loaded:", error.message);
+    return res.status(500).json({ error: "Your account could not be loaded." });
+  }
+});
+
+app.get("/api/account/profile", requireCustomer, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, BTRIM(phone) AS phone, COALESCE(full_name, '') AS name, " +
+      "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin " +
+      "FROM customer_accounts WHERE id = $1",
+      [req.customerSession.customerId],
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Customer account not found." });
+    return res.json({ profile: result.rows[0] });
+  } catch (error) {
+    console.error("Customer profile could not be loaded:", error.message);
+    return res.status(500).json({ error: "Customer profile could not be loaded." });
+  }
+});
+
+app.put("/api/account/profile", requireCustomer, async (req, res) => {
+  const { name, address, pin } = req.body || {};
+  if (typeof name !== "string" || name.trim().length < 2 || name.trim().length > 100) {
+    return res.status(400).json({ error: "Enter a name between 2 and 100 characters." });
+  }
+  if (typeof address !== "string" || address.trim().length < 5 || address.trim().length > 500) {
+    return res.status(400).json({ error: "Enter a delivery address between 5 and 500 characters." });
+  }
+  if (typeof pin !== "string" || !/^\d{6}$/.test(pin)) {
+    return res.status(400).json({ error: "Enter a valid 6-digit PIN code." });
+  }
+  try {
+    const result = await pool.query(
+      "UPDATE customer_accounts SET full_name = $1, delivery_address = $2, postal_code = $3, updated_at = NOW() " +
+      "WHERE id = $4 RETURNING id, BTRIM(phone) AS phone, full_name AS name, delivery_address AS address, postal_code AS pin",
+      [name.trim(), address.trim(), pin, req.customerSession.customerId],
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Customer account not found." });
+    return res.json({ profile: result.rows[0] });
+  } catch (error) {
+    console.error("Customer profile could not be saved:", error.message);
+    return res.status(500).json({ error: "Your details could not be saved." });
+  }
+});
+
+app.get("/api/account/daily-orders", requireCustomer, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, product_id, product_name, size, quantity, is_active, created_at " +
+      "FROM customer_daily_orders WHERE customer_id = $1 ORDER BY created_at ASC, id ASC",
+      [req.customerSession.customerId],
+    );
+    return res.json({ entries: result.rows });
+  } catch (error) {
+    console.error("Daily delivery list could not be loaded:", error.message);
+    return res.status(500).json({ error: "Your daily delivery list could not be loaded." });
+  }
+});
+
+app.post("/api/account/daily-orders", requireCustomer, async (req, res) => {
+  const item = {
+    productId: req.body?.productId,
+    size: req.body?.size,
+    quantity: req.body?.quantity,
+  };
+  const calculated = calculateProductItems([item]);
+  if (calculated.error) return res.status(400).json({ error: calculated.error });
+  try {
+    const profile = await pool.query(
+      "SELECT full_name, delivery_address, postal_code FROM customer_accounts WHERE id = $1",
+      [req.customerSession.customerId],
+    );
+    if (!profile.rowCount || !profile.rows[0].full_name || !profile.rows[0].delivery_address || !profile.rows[0].postal_code) {
+      return res.status(400).json({ error: "Save your name and delivery address in General before adding daily items." });
+    }
+    const product = products[item.productId];
+    const saved = await pool.query(
+      "INSERT INTO customer_daily_orders (customer_id, product_id, product_name, size, quantity) " +
+      "VALUES ($1, $2, $3, $4, $5) RETURNING id, product_id, product_name, size, quantity, is_active, created_at",
+      [req.customerSession.customerId, Number(item.productId), product.name, item.size, Number(item.quantity)],
+    );
+    return res.status(201).json({ entry: saved.rows[0] });
+  } catch (error) {
+    console.error("Daily delivery item could not be saved:", error.message);
+    return res.status(500).json({ error: "Your daily delivery item could not be saved." });
+  }
+});
+
+app.patch("/api/account/daily-orders/:id", requireCustomer, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: "Choose a valid daily item." });
+  const hasQuantity = Object.prototype.hasOwnProperty.call(req.body || {}, "quantity");
+  const hasActive = Object.prototype.hasOwnProperty.call(req.body || {}, "isActive");
+  if (!hasQuantity && !hasActive) return res.status(400).json({ error: "Choose a quantity or active status to update." });
+  const quantity = hasQuantity ? Number(req.body.quantity) : null;
+  const isActive = hasActive ? req.body.isActive : null;
+  if (hasQuantity && (!Number.isInteger(quantity) || quantity < 1 || quantity > 99)) {
+    return res.status(400).json({ error: "Daily quantity must be from 1 to 99." });
+  }
+  if (hasActive && typeof isActive !== "boolean") return res.status(400).json({ error: "Choose whether this daily item is active." });
+  try {
+    const result = await pool.query(
+      "UPDATE customer_daily_orders SET quantity = COALESCE($1, quantity), is_active = COALESCE($2, is_active), updated_at = NOW() " +
+      "WHERE id = $3 AND customer_id = $4 RETURNING id, product_id, product_name, size, quantity, is_active, created_at",
+      [quantity, isActive, id, req.customerSession.customerId],
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Daily item not found." });
+    return res.json({ entry: result.rows[0] });
+  } catch (error) {
+    console.error("Daily delivery item could not be updated:", error.message);
+    return res.status(500).json({ error: "Your daily delivery item could not be updated." });
+  }
+});
+
+app.delete("/api/account/daily-orders/:id", requireCustomer, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: "Choose a valid daily item." });
+  try {
+    const result = await pool.query(
+      "DELETE FROM customer_daily_orders WHERE id = $1 AND customer_id = $2 RETURNING id",
+      [id, req.customerSession.customerId],
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Daily item not found." });
+    return res.json({ removed: true });
+  } catch (error) {
+    console.error("Daily delivery item could not be removed:", error.message);
+    return res.status(500).json({ error: "Your daily delivery item could not be removed." });
+  }
+});
+
+app.get("/api/account/orders", requireCustomer, async (req, res) => {
+  const parsedLimit = Number.parseInt(req.query.limit, 10);
+  const parsedOffset = Number.parseInt(req.query.offset, 10);
+  const limit = Number.isInteger(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 100) : 50;
+  const offset = Number.isInteger(parsedOffset) ? Math.min(Math.max(parsedOffset, 0), 1000000) : 0;
+  try {
+    const [orders, count] = await Promise.all([
+      pool.query(
+        "SELECT id, created_at, customer_name, BTRIM(phone) AS phone, delivery_address, BTRIM(postal_code) AS postal_code, " +
+        "order_type, items, total_rupees, payment_method FROM customer_orders " +
+        "WHERE customer_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3",
+        [req.customerSession.customerId, limit, offset],
+      ),
+      pool.query("SELECT COUNT(*)::int AS total FROM customer_orders WHERE customer_id = $1", [req.customerSession.customerId]),
+    ]);
+    return res.json({ entries: orders.rows, total: count.rows[0].total, hasMore: offset + orders.rows.length < count.rows[0].total });
+  } catch (error) {
+    console.error("Customer order history could not be loaded:", error.message);
+    return res.status(500).json({ error: "Your order history could not be loaded." });
+  }
+});
+
 app.get("/api/health", async (_req, res) => {
   try {
     await pool.query("SELECT 1");
@@ -183,8 +488,8 @@ app.post("/api/orders", async (req, res) => {
   try {
     const result = await pool.query(
       "INSERT INTO customer_orders " +
-      "(customer_name, phone, delivery_address, postal_code, order_type, items, total_rupees, payment_method, consented_at) " +
-      "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, NOW()) RETURNING id, created_at",
+      "(customer_name, phone, delivery_address, postal_code, order_type, items, total_rupees, payment_method, consented_at, customer_id) " +
+      "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, NOW(), $9) RETURNING id, created_at",
       [
         req.body.customer.name.trim(),
         req.body.customer.phone,
@@ -194,6 +499,7 @@ app.post("/api/orders", async (req, res) => {
         JSON.stringify(calculated.items),
         calculated.total,
         req.body.paymentMethod,
+        readCustomerSessionToken(req)?.customerId || null,
       ],
     );
     return res.status(201).json({
@@ -283,7 +589,27 @@ async function start() {
     "payment_method VARCHAR(20) NOT NULL CHECK (payment_method IN ('upi', 'card', 'emi', 'netbanking', 'cod')), " +
     "consented_at TIMESTAMPTZ NOT NULL)"
   );
+  await pool.query(
+    "CREATE TABLE IF NOT EXISTS customer_accounts (" +
+    "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, " +
+    "phone CHAR(10) NOT NULL UNIQUE, full_name VARCHAR(100), " +
+    "delivery_address VARCHAR(500), postal_code CHAR(6), " +
+    "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+  );
+  await pool.query(
+    "ALTER TABLE customer_orders ADD COLUMN IF NOT EXISTS customer_id BIGINT REFERENCES customer_accounts(id) ON DELETE SET NULL"
+  );
+  await pool.query(
+    "CREATE TABLE IF NOT EXISTS customer_daily_orders (" +
+    "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, " +
+    "customer_id BIGINT NOT NULL REFERENCES customer_accounts(id) ON DELETE CASCADE, " +
+    "product_id INTEGER NOT NULL, product_name VARCHAR(120) NOT NULL, size VARCHAR(20) NOT NULL, " +
+    "quantity INTEGER NOT NULL CHECK (quantity BETWEEN 1 AND 99), is_active BOOLEAN NOT NULL DEFAULT TRUE, " +
+    "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+  );
   await pool.query("CREATE INDEX IF NOT EXISTS customer_orders_recent_idx ON customer_orders (created_at DESC, id DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS customer_orders_account_recent_idx ON customer_orders (customer_id, created_at DESC, id DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS customer_daily_orders_account_idx ON customer_daily_orders (customer_id, created_at ASC, id ASC)");
   app.listen(port, "0.0.0.0", () => console.log("Royal Hill server listening on port " + port));
 }
 
