@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import "./App.css";
+import CustomerAccount from "./CustomerAccount";
 
 const products = [
   { id: 1, name: "Farm Fresh Milk", category: "Milk", detail: "Whole milk · 1 litre", price: 68, icon: "🥛", tag: "DAILY FRESH", color: "milk" },
@@ -83,6 +84,7 @@ function App() {
   const [orderSubmitting, setOrderSubmitting] = useState(false);
   const [subscriptionPage, setSubscriptionPage] = useState("closed");
   const [selectedPlan, setSelectedPlan] = useState(null);
+  const [showAccount, setShowAccount] = useState(false);
 
   const visibleProducts = useMemo(() => products.filter((product) => {
     const matchesCategory = activeCategory === "All products" || product.category === activeCategory;
@@ -169,6 +171,8 @@ function App() {
     setSelectedProduct(product);
     setSelectedSize(getProductSizes(product)[0].label);
   };
+
+  if (showAccount) return <CustomerAccount onBack={() => setShowAccount(false)} />;
 
   if (subscriptionPage !== "closed") {
     return (
@@ -363,6 +367,7 @@ function App() {
             <button className="subscription-button" onClick={() => setSubscriptionPage("plans")}>
               <span>✦</span><span className="subscription-button-text">Subscription</span>
             </button>
+            <button className="account-entry-button" onClick={() => setShowAccount(true)}>Login / Account</button>
           </div>
         </header>
 
