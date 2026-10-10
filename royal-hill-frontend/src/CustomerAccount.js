@@ -30,12 +30,14 @@ function CustomerAccount({ onBack }) {
   const [loading, setLoading] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [method, setMethod] = useState("email");
   const [otp, setOtp] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [tab, setTab] = useState("General");
-  const [profile, setProfile] = useState({ name: "", phone: "", address: "", pin: "" });
+  const [profile, setProfile] = useState({ name: "", phone: "", email: "", address: "", pin: "" });
   const [dailyOrders, setDailyOrders] = useState([]);
   const [history, setHistory] = useState([]);
   const [historyOffset, setHistoryOffset] = useState(0);
@@ -45,7 +47,8 @@ function CustomerAccount({ onBack }) {
   const loadAccount = async () => {
     const result = await accountRequest("/api/account/session");
     setProfile(result.profile);
-    setPhone(result.profile.phone);
+    setPhone(result.profile.phone || "");
+    setEmail(result.profile.email || "");
     const daily = await accountRequest("/api/account/daily-orders");
     setDailyOrders(daily.entries);
     const orders = await accountRequest("/api/account/orders?limit=50&offset=0");
@@ -61,7 +64,8 @@ function CustomerAccount({ onBack }) {
         if (!current) return;
         setAuthenticated(true);
         setProfile(result.profile);
-        setPhone(result.profile.phone);
+        setPhone(result.profile.phone || "");
+        setEmail(result.profile.email || "");
         const [daily, orders] = await Promise.all([
           accountRequest("/api/account/daily-orders"),
           accountRequest("/api/account/orders?limit=50&offset=0"),
@@ -82,7 +86,7 @@ function CustomerAccount({ onBack }) {
     setBusy(true); setMessage("");
     try {
       const result = await accountRequest("/api/auth/send-otp", {
-        method: "POST", body: JSON.stringify({ phone }),
+        method: "POST", body: JSON.stringify({ method, identifier: method === "email" ? email : phone }),
       });
       setOtpSent(true);
       setMessage(result.message || "A verification code was sent to your mobile.");
@@ -95,11 +99,12 @@ function CustomerAccount({ onBack }) {
     setBusy(true); setMessage("");
     try {
       const result = await accountRequest("/api/auth/verify-otp", {
-        method: "POST", body: JSON.stringify({ phone, code: otp }),
+        method: "POST", body: JSON.stringify({ method, identifier: method === "email" ? email : phone, code: otp }),
       });
       setAuthenticated(true);
       setProfile(result.profile);
-      setPhone(result.profile.phone);
+      setPhone(result.profile.phone || "");
+      setEmail(result.profile.email || "");
       setTab("General");
       await loadAccount();
       setMessage("Your mobile is verified. Complete your details and save your profile.");
@@ -171,7 +176,7 @@ function CustomerAccount({ onBack }) {
     setBusy(true);
     try { await accountRequest("/api/auth/logout", { method: "POST" }); }
     catch (error) { setMessage(error.message); }
-    setAuthenticated(false); setOtp(""); setOtpSent(false); setProfile({ name: "", phone: "", address: "", pin: "" }); setBusy(false);
+    setAuthenticated(false); setOtp(""); setOtpSent(false); setProfile({ name: "", phone: "", email: "", address: "", pin: "" }); setBusy(false);
   };
 
   const changeNewProduct = (productId) => {
@@ -196,12 +201,20 @@ function CustomerAccount({ onBack }) {
         <section className="account-login-card">
           <p className="eyebrow">YOUR ROYAL HILL ACCOUNT</p>
           <h1>{otpSent ? "Verify your mobile" : "Login or create an account"}</h1>
-          <p className="account-intro">Use your mobile number to sign in or register. We’ll send you a one-time verification code.</p>
+          <p className="account-intro">Sign in or register using a one-time code sent to your email or mobile.</p>
+          {!otpSent && <div className="account-method-picker" role="group" aria-label="Verification method">
+            <button type="button" className={method === "email" ? "selected" : ""} onClick={() => { setMethod("email"); setOtp(""); setMessage(""); }}>Email</button>
+            <button type="button" className={method === "phone" ? "selected" : ""} onClick={() => { setMethod("phone"); setOtp(""); setMessage(""); }}>Mobile SMS</button>
+          </div>}
           {!otpSent ? (
             <form className="account-login-form" onSubmit={sendOtp}>
-              <label>Mobile number <span className="account-country-code">+91</span>
-                <input aria-label="10-digit mobile number" inputMode="numeric" autoComplete="tel-national" maxLength="10" pattern="[0-9]{10}" value={phone} onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="10-digit mobile number" required />
-              </label>
+              {method === "email" ? (
+                <label>Email address<input type="email" autoComplete="email" maxLength="254" value={email} onChange={(event) => setEmail(event.target.value.trim())} placeholder="you@example.com" required /></label>
+              ) : (
+                <label>Mobile number <span className="account-country-code">+91</span>
+                  <input aria-label="10-digit mobile number" inputMode="numeric" autoComplete="tel-national" maxLength="10" pattern="[6-9][0-9]{9}" value={phone} onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="10-digit mobile number" required />
+                </label>
+              )}
               <button className="checkout-primary" disabled={busy}>{busy ? "Sending code…" : "Send verification code"} <span>→</span></button>
             </form>
           ) : (
@@ -216,7 +229,7 @@ function CustomerAccount({ onBack }) {
             </form>
           )}
           {message && <p className="account-message" role="status">{message}</p>}
-          <p className="account-login-footnote">New here? Your account will be created after your mobile number is verified.</p>
+          <p className="account-login-footnote">New here? Your account will be created after you verify your {method === "email" ? "email address" : "mobile number"}.</p>
         </section>
       ) : (
         <div className="customer-account-layout">
@@ -242,7 +255,8 @@ function CustomerAccount({ onBack }) {
               <form className="account-profile-card" onSubmit={saveProfile}>
                 <p className="account-section-note">Keep your contact and delivery details up to date.</p>
                 <label>Full name<input name="name" autoComplete="name" value={profile.name} onChange={(event) => setProfile((current) => ({ ...current, name: event.target.value }))} placeholder="Your full name" minLength="2" maxLength="100" required /></label>
-                <label>Mobile number <span className="verified-inline">Verified by OTP</span><input value={"+91 " + profile.phone} readOnly /></label>
+                <label>Mobile number {profile.phone ? <span className="verified-inline">Verified by OTP</span> : <span className="account-unverified-inline">Not verified</span>}<input value={profile.phone ? "+91 " + profile.phone : "Not added"} readOnly /></label>
+                <label>Email address {profile.email ? <span className="verified-inline">Verified by OTP</span> : <span className="account-unverified-inline">Not verified</span>}<input value={profile.email || "Not added"} readOnly /></label>
                 <label className="account-wide-field">Delivery address<textarea name="address" autoComplete="street-address" rows="3" maxLength="500" value={profile.address} onChange={(event) => setProfile((current) => ({ ...current, address: event.target.value }))} placeholder="House / flat, street, area" required /></label>
                 <label>PIN code<input name="pin" inputMode="numeric" autoComplete="postal-code" pattern="[0-9]{6}" maxLength="6" value={profile.pin} onChange={(event) => setProfile((current) => ({ ...current, pin: event.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="6-digit PIN code" required /></label>
                 <div className="account-form-actions"><button className="checkout-primary" disabled={busy}>{busy ? "Saving…" : "Save details"} <span>✓</span></button></div>
