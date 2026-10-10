@@ -1,0 +1,98 @@
+.customer-account-page { min-height: 100vh; padding: 0 5vw 60px; background: #f5f9fd; color: #294966; }
+.customer-account-header { min-height: 84px; display: flex; align-items: center; justify-content: space-between; max-width: 1180px; margin: auto; border-bottom: 1px solid #e3edf6; }
+.customer-account-header .logo { display: flex; align-items: center; gap: 10px; color: #294966; text-decoration: none; font: 700 20px Georgia,serif; }
+.customer-account-header .logo b { color: #3781c6; }
+.customer-account-loading { display: grid; place-items: center; min-height: 70vh; color: #6b8094; }
+.account-login-card { width: min(520px,100%); margin: 70px auto; padding: 38px; border: 1px solid #e2ebf3; border-radius: 18px; background: #fff; box-shadow: 0 15px 45px #24466a0b; }
+.account-login-card h1,.customer-account-content h1 { margin: 8px 0 10px; color: #203c57; font: 700 32px Georgia,serif; }
+.account-intro,.account-section-note { color: #73879a; font-size: 13px; line-height: 1.6; }
+.account-login-form { display: grid; gap: 18px; margin-top: 26px; }
+.account-login-form label,.account-profile-card label,.daily-order-add-form label { display: grid; gap: 8px; color: #49647c; font-size: 12px; font-weight: 700; }
+.account-login-form input,.account-profile-card input,.account-profile-card textarea,.daily-order-add-form select,.daily-order-add-form input { width: 100%; padding: 12px 13px; border: 1px solid #d9e5ef; border-radius: 9px; outline: none; background: #fff; color: #294966; font: 400 13px inherit; }
+.account-login-form input:focus,.account-profile-card input:focus,.account-profile-card textarea:focus,.daily-order-add-form select:focus,.daily-order-add-form input:focus { border-color: #6da6db; box-shadow: 0 0 0 3px #6da6db1c; }
+.account-country-code { float: right; color: #3280c6; }
+.account-login-form > .checkout-primary,.account-otp-actions > .checkout-primary { width: 100%; }
+.account-otp-actions { display: grid; gap: 12px; }
+.account-text-button { border: 0; background: transparent; color: #4787c0; cursor: pointer; padding: 7px; }
+.account-login-footnote { margin: 24px 0 0; color: #8799aa; font-size: 11px; text-align: center; }
+.account-message { margin: 18px 0 0; padding: 12px 14px; border-radius: 9px; background: #eef6ff; color: #336eaa; font-size: 12px; line-height: 1.5; }
+.customer-account-layout { display: grid; grid-template-columns: 220px minmax(0,1fr); gap: 28px; max-width: 1180px; margin: 32px auto 0; align-items: start; }
+.customer-account-nav { display: grid; gap: 7px; padding: 16px; background: #fff; border: 1px solid #e2ebf3; border-radius: 14px; }
+.account-nav-title { margin: 4px 10px 10px; color: #91a2b1; font-size: 10px; font-weight: 800; letter-spacing: 1px; }
+.customer-account-nav button { display: flex; align-items: center; gap: 11px; min-height: 42px; padding: 0 11px; border: 0; border-radius: 8px; background: transparent; color: #637d94; text-align: left; font-size: 12px; font-weight: 700; cursor: pointer; }
+.customer-account-nav button.active { background: #edf6ff; color: #2675b8; }
+.customer-account-nav button span { width: 20px; font-size: 15px; text-align: center; }
+.customer-account-nav .account-logout-button { margin-top: 8px; border-top: 1px solid #edf1f5; border-radius: 0; padding-top: 8px; color: #a75d59; }
+.customer-account-content { min-width: 0; padding: 27px; border: 1px solid #e2ebf3; border-radius: 15px; background: #fff; }
+.account-content-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+.account-content-heading h1 { margin-bottom: 0; }
+.account-verified-badge { padding: 8px 11px; border-radius: 30px; background: #eef8f0; color: #478351; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.account-profile-card { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; max-width: 790px; }
+.account-profile-card .account-section-note,.account-profile-card .account-wide-field,.account-profile-card .account-form-actions { grid-column: 1/-1; }
+.account-profile-card textarea { resize: vertical; }
+.verified-inline { color: #478351; font-size: 10px; font-weight: 600; }
+.account-form-actions { display: flex; justify-content: flex-end; padding-top: 4px; }
+.account-form-actions .checkout-primary { min-width: 175px; }
+.account-daily-section,.account-history-section { display: grid; gap: 18px; }
+.account-section-heading h2 { margin: 0; color: #294966; font: 700 20px Georgia,serif; }
+.account-section-heading p { margin: 6px 0 0; color: #7b8fa2; font-size: 12px; }
+.daily-order-add-form { display: grid; grid-template-columns: minmax(160px,1.5fr) minmax(100px,1fr) 90px auto; align-items: end; gap: 12px; padding: 17px; border-radius: 11px; background: #f6faff; }
+.daily-order-add-form button { min-height: 42px; white-space: nowrap; }
+.daily-order-list { display: grid; gap: 10px; }
+.daily-order-row { display: flex; align-items: center; gap: 13px; padding: 14px; border: 1px solid #e6edf3; border-radius: 11px; }
+.daily-order-row.paused { opacity: .6; background: #f8fafc; }
+.daily-order-icon { display: grid; place-items: center; flex: 0 0 42px; height: 42px; border-radius: 10px; background: #edf6ff; font-size: 20px; }
+.daily-order-details { display: grid; gap: 4px; flex: 1; min-width: 100px; }
+.daily-order-details strong { color: #294966; font-size: 12px; }
+.daily-order-details span { color: #71869a; font-size: 11px; }
+.daily-order-details small { color: #42834b; font-size: 10px; }
+.daily-order-row.paused .daily-order-details small { color: #8b7b56; }
+.daily-order-actions { display: flex; align-items: center; gap: 6px; }
+.daily-order-actions button { min-height: 30px; padding: 4px 8px; border: 1px solid #dce7f0; border-radius: 6px; background: #fff; color: #4a769e; cursor: pointer; font-size: 11px; }
+.daily-order-actions button:disabled { opacity: .45; cursor: not-allowed; }
+.daily-order-actions .daily-pause-button { margin-left: 5px; }
+.daily-order-actions .daily-remove-button { border-color: #f0dddd; color: #a75d59; }
+.account-empty-state { display: grid; justify-items: center; padding: 44px 15px; border: 1px dashed #dce7f0; border-radius: 12px; text-align: center; }
+.account-empty-state > span { font-size: 28px; }
+.account-empty-state h3 { margin: 11px 0 5px; color: #35536e; font-size: 15px; }
+.account-empty-state p { max-width: 380px; margin: 0; color: #8395a5; font-size: 12px; line-height: 1.5; }
+.account-order-list { display: grid; gap: 14px; }
+.account-history-card { padding: 17px; border: 1px solid #e4ecf3; border-radius: 11px; }
+.account-history-head { display: flex; justify-content: space-between; gap: 15px; }
+.account-history-head > div { display: grid; gap: 5px; }
+.account-history-head span { color: #294966; font-size: 13px; font-weight: 800; }
+.account-history-head small { color: #8597a7; font-size: 10px; }
+.account-history-head > strong { color: #2c78ba; font-size: 17px; }
+.account-history-meta { margin: 12px 0 8px; color: #74899c; font-size: 10px; font-weight: 700; }
+.account-history-card ul { display: grid; gap: 7px; margin: 0; padding: 11px 0; border-top: 1px solid #edf1f4; border-bottom: 1px solid #edf1f4; list-style: none; }
+.account-history-card li { display: flex; justify-content: space-between; gap: 10px; color: #4e687e; font-size: 11px; }
+.account-history-card li strong { white-space: nowrap; }
+.account-history-delivery { display: grid; gap: 4px; margin-top: 11px; color: #8798a7; font-size: 10px; }
+.account-load-more { justify-self: center; border: 1px solid #dce8f2; border-radius: 8px; padding: 10px 15px; background: #fff; color: #337ab8; font-size: 11px; font-weight: 700; cursor: pointer; }
+.account-load-more:disabled { opacity: .6; }
+.topbar-actions .account-entry-button { min-height: 44px; padding: 0 13px; border: 1px solid #d9e9fa; border-radius: 12px; background: #fff; color: #397bb4; font-size: 12px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.account-login-form button:disabled,.account-otp-actions button:disabled,.customer-account-nav button:disabled,.daily-order-add-form button:disabled { opacity: .55; cursor: wait; }
+@media(max-width:850px) {
+  .customer-account-layout { grid-template-columns: 1fr; gap: 14px; }
+  .customer-account-nav { grid-template-columns: repeat(4,minmax(0,1fr)); padding: 8px; }
+  .account-nav-title { display: none; }
+  .customer-account-nav button { justify-content: center; gap: 6px; padding: 0 6px; font-size: 10px; }
+  .customer-account-nav .account-logout-button { margin-top: 0; border-top: 0; padding-top: 0; }
+  .daily-order-row { flex-wrap: wrap; }
+  .daily-order-details { flex: 1 1 calc(100% - 60px); }
+  .daily-order-actions { width: 100%; justify-content: flex-end; }
+}
+@media(max-width:600px) {
+  .customer-account-page { padding: 0 14px 35px; }
+  .customer-account-header { min-height: 70px; }
+  .customer-account-header .logo { font-size: 16px; }
+  .account-login-card { margin: 38px auto; padding: 25px 20px; }
+  .account-login-card h1,.customer-account-content h1 { font-size: 25px; }
+  .customer-account-content { padding: 19px 15px; }
+  .account-content-heading { align-items: flex-start; flex-direction: column; }
+  .account-profile-card { grid-template-columns: 1fr; gap: 13px; }
+  .account-profile-card .account-section-note,.account-profile-card .account-wide-field,.account-profile-card .account-form-actions { grid-column: auto; }
+  .daily-order-add-form { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .daily-order-add-form button { width: 100%; }
+  .account-history-card { padding: 13px; }
+}
