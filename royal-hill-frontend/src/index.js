@@ -2,12 +2,14 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
+import AdminDashboard from './AdminDashboard';
 import reportWebVitals from './reportWebVitals';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
+const Page = window.location.pathname === '/admin' ? AdminDashboard : App;
 root.render(
   <React.StrictMode>
-    <App />
+    <Page />
   </React.StrictMode>
 );
 

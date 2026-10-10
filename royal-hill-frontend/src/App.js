@@ -77,8 +77,10 @@ function App() {
   const [selectedSize, setSelectedSize] = useState("");
   const [checkoutStep, setCheckoutStep] = useState("shop");
   const [customer, setCustomer] = useState({ name: "", phone: "", address: "", pin: "" });
+  const [customerConsent, setCustomerConsent] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState("upi");
   const [notice, setNotice] = useState("");
+  const [orderSubmitting, setOrderSubmitting] = useState(false);
   const [subscriptionPage, setSubscriptionPage] = useState("closed");
   const [selectedPlan, setSelectedPlan] = useState(null);
 
@@ -127,6 +129,42 @@ function App() {
     setCustomer((current) => ({ ...current, [name]: value }));
   };
 
+  const submitOrder = async (orderType) => {
+    if (orderSubmitting) return;
+    setOrderSubmitting(true);
+    setNotice("");
+    const payload = {
+      orderType,
+      customer,
+      consent: customerConsent,
+      paymentMethod,
+      ...(orderType === "subscription"
+        ? { planId: selectedPlan?.id }
+        : { items: cartItems.map((item) => ({ productId: item.productId, size: item.size, quantity: item.quantity })) }),
+    };
+    try {
+      const response = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "We could not save your request.");
+      setNotice("Request #" + result.id + " saved. No payment has been taken.");
+      setCart({});
+      setCustomer({ name: "", phone: "", address: "", pin: "" });
+      setCustomerConsent(false);
+      setCheckoutStep("shop");
+      setSubscriptionPage("closed");
+      window.scrollTo(0, 0);
+      window.setTimeout(() => setNotice(""), 6000);
+    } catch (error) {
+      setNotice(error.message || "We could not save your request. Please try again.");
+    } finally {
+      setOrderSubmitting(false);
+    }
+  };
+
   const openSizePicker = (product) => {
     setSelectedProduct(product);
     setSelectedSize(getProductSizes(product)[0].label);
@@ -139,8 +177,8 @@ function App() {
           <a className="logo" href="#home" onClick={(event) => { event.preventDefault(); setSubscriptionPage("closed"); }}>
             <span className="logo-mark">✿</span><span>Royal Hill <b>Dairy</b></span>
           </a>
-          <button className="checkout-back" onClick={() => setSubscriptionPage(subscriptionPage === "payment" ? "plans" : "closed")}>
-            ← {subscriptionPage === "payment" ? "Back to plans" : "Back to shop"}
+          <button className="checkout-back" onClick={() => setSubscriptionPage(subscriptionPage === "payment" ? "details" : subscriptionPage === "details" ? "plans" : "closed")}>
+            ← {subscriptionPage === "payment" ? "Back to details" : subscriptionPage === "details" ? "Back to plans" : "Back to shop"}
           </button>
         </header>
 
@@ -158,12 +196,26 @@ function App() {
                   <div className="plan-price">₹{plan.price}<span> / {plan.period}</span></div>
                   <p>{plan.description}</p>
                   <ul>{plan.features.map((feature) => <li key={feature}>✓ &nbsp;{feature}</li>)}</ul>
-                  <button className="checkout-primary" onClick={() => { setSelectedPlan(plan); setSubscriptionPage("payment"); window.scrollTo(0, 0); }}>
+                  <button className="checkout-primary" onClick={() => { setSelectedPlan(plan); setSubscriptionPage("details"); window.scrollTo(0, 0); }}>
                     Proceed to payment <span>→</span>
                   </button>
                 </article>
               ))}
             </div>
+          </main>
+        ) : subscriptionPage === "details" ? (
+          <main className="subscription-content subscription-payment-page">
+            <p className="eyebrow">DELIVERY DETAILS</p>
+            <h1>Where should we deliver?</h1>
+            <p className="subscription-intro">Add your contact and address details for this subscription request.</p>
+            <form className="checkout-form subscription-details-form" onSubmit={(event) => { event.preventDefault(); setSubscriptionPage("payment"); window.scrollTo(0, 0); }}>
+              <label>Full name<input name="name" value={customer.name} onChange={updateCustomer} placeholder="Your name" autoComplete="name" required /></label>
+              <label>Phone number<input name="phone" type="tel" inputMode="numeric" pattern="[0-9]{10}" maxLength="10" value={customer.phone} onChange={updateCustomer} placeholder="10-digit mobile number" autoComplete="tel" required /></label>
+              <label className="full-field">Delivery address<textarea name="address" rows="3" value={customer.address} onChange={updateCustomer} placeholder="House / flat, street, area" autoComplete="street-address" required /></label>
+              <label>PIN code<input name="pin" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" value={customer.pin} onChange={updateCustomer} placeholder="6-digit PIN code" autoComplete="postal-code" required /></label>
+              <label className="full-field consent-row"><input type="checkbox" checked={customerConsent} onChange={(event) => setCustomerConsent(event.target.checked)} required /><span>I agree to send these details to Royal Hill Dairy to handle my order request.</span></label>
+              <button className="checkout-primary full-field" type="submit">Continue to payment <span>→</span></button>
+            </form>
           </main>
         ) : (
           <main className="subscription-content subscription-payment-page">
@@ -187,10 +239,10 @@ function App() {
                     </button>
                   ))}
                 </div>
-                <button className="checkout-primary subscription-pay-button" onClick={() => setNotice("Subscription plan selected. Connect a payment provider to complete payment.")}>
-                  Pay ₹{selectedPlan?.price} <span>→</span>
+                <button className="checkout-primary subscription-pay-button" disabled={orderSubmitting} onClick={() => submitOrder("subscription")}>
+                  {orderSubmitting ? "Saving request…" : "Save subscription request · ₹" + selectedPlan?.price} <span>→</span>
                 </button>
-                <p className="payment-demo-note">Payment is a demo until a payment provider is connected.</p>
+                <p className="payment-demo-note">This saves your request for the dairy team. No payment is taken and delivery is not yet confirmed.</p>
               </section>
             </div>
           </main>
@@ -230,6 +282,7 @@ function App() {
                   <label>Phone number<input name="phone" type="tel" inputMode="numeric" pattern="[0-9]{10}" maxLength="10" value={customer.phone} onChange={updateCustomer} placeholder="10-digit mobile number" autoComplete="tel" required /></label>
                   <label className="full-field">Delivery address<textarea name="address" rows="3" value={customer.address} onChange={updateCustomer} placeholder="House / flat, street, area" autoComplete="street-address" required /></label>
                   <label>PIN code<input name="pin" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" value={customer.pin} onChange={updateCustomer} placeholder="6-digit PIN code" autoComplete="postal-code" required /></label>
+                  <label className="full-field consent-row"><input type="checkbox" checked={customerConsent} onChange={(event) => setCustomerConsent(event.target.checked)} required /><span>I agree to send these details to Royal Hill Dairy to handle my order request.</span></label>
                   <button className="checkout-primary full-field" type="submit">Proceed to payment <span>→</span></button>
                 </form>
               </>
@@ -249,10 +302,10 @@ function App() {
                   ))}
                 </div>
                 <div className="delivery-summary"><span>Delivering to</span><strong>{customer.name} · {customer.phone}</strong><p>{customer.address}, PIN {customer.pin}</p></div>
-                <button className="checkout-primary payment-submit" onClick={() => setNotice(paymentMethod === "cod" ? "Cash on delivery selected. Connect an order service to place this order." : "Payment selected. Connect a payment provider to accept payments.")}>
-                  {paymentMethod === "cod" ? "Place order" : `Continue · ₹${cartTotal}`} <span>→</span>
+                <button className="checkout-primary payment-submit" disabled={orderSubmitting} onClick={() => submitOrder("product")}>
+                  {orderSubmitting ? "Saving request…" : "Save order request · ₹" + cartTotal} <span>→</span>
                 </button>
-                <p className="payment-demo-note">Demo checkout: a payment or order service is needed to accept payments or place orders.</p>
+                <p className="payment-demo-note">This saves your request for the dairy team. No payment is taken and delivery is not yet confirmed.</p>
               </>
             )}
           </section>
