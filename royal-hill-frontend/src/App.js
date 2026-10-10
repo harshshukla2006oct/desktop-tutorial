@@ -415,7 +415,7 @@ function App() {
                     <div className="basket-item" key={item.key}>
                       <span className="basket-product-icon">{item.product.icon}</span>
                       <div className="basket-product-info"><strong>{item.product.name}</strong><span>{item.size} · ₹{item.unitPrice}</span></div>
-                      <div className="quantity-control"><button onClick={() => changeQuantity(item.key, -1)} aria-label="Remove one">−</button><span>{item.quantity}</span><button onClick={() => changeQuantity(item.key, 1)} aria-label="Add one">+</button></div>
+                      <div className="quantity-control"><button onClick={() => changeQuantity(item.key, -1)} aria-label="Remove one">−</button><span>{item.quantity}</span><button onClick={() => changeQuantity(item.key, 1)} aria-label={item.quantity >= 99 ? "Maximum quantity reached" : "Add one"} disabled={item.quantity >= 99} title={item.quantity >= 99 ? "Maximum 99 per item" : undefined}>+</button></div>
                     </div>
                   ))}
                 </div>
