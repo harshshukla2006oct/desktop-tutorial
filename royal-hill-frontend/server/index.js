@@ -121,8 +121,8 @@ function productSizeOptions(product) {
 }
 
 function calculateProductItems(inputItems) {
-  if (!Array.isArray(inputItems) || inputItems.length < 1 || inputItems.length > 20) {
-    return { error: "Your basket is empty or contains too many items." };
+  if (!Array.isArray(inputItems) || inputItems.length < 1 || inputItems.length > 27) {
+    return { error: "Your basket is empty or contains too many product and size combinations." };
   }
   const result = [];
   let total = 0;
@@ -130,8 +130,11 @@ function calculateProductItems(inputItems) {
     const product = products[item?.productId];
     const quantity = Number(item?.quantity);
     const size = product && productSizeOptions(product).find((option) => option.label === item?.size);
-    if (!product || !size || !Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
-      return { error: "One or more basket items are invalid. Please review your basket." };
+    if (!product || !size) {
+      return { error: "A basket item has an invalid product or size. Please review your basket." };
+    }
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+      return { error: "Each product quantity must be from 1 to 99." };
     }
     const unitPrice = Math.max(1, Math.round((product.basePrice * size.amount) / product.baseAmount));
     const lineTotal = unitPrice * quantity;
