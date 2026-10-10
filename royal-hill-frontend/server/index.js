@@ -100,11 +100,12 @@ function readSessionToken(req) {
 }
 
 
-function createCustomerSessionToken(customerId, phone) {
+function createCustomerSessionToken(customerId, loginMethod, verifiedIdentifier) {
   const payload = Buffer.from(JSON.stringify({
     role: "customer",
     customerId,
-    phone,
+    loginMethod,
+    verifiedIdentifier,
     exp: Math.floor(Date.now() / 1000) + sessionLifetimeSeconds,
   })).toString("base64url");
   const signature = crypto.createHmac("sha256", process.env.SESSION_SECRET).update(payload).digest("base64url");
@@ -132,7 +133,7 @@ function readCustomerSessionToken(req) {
 
 function requireCustomer(req, res, next) {
   const session = readCustomerSessionToken(req);
-  if (!session) return res.status(401).json({ error: "Sign in with your verified mobile number." });
+  if (!session) return res.status(401).json({ error: "Sign in with your verified email or mobile number." });
   req.customerSession = session;
   return next();
 }
@@ -228,55 +229,101 @@ function calculateSubscriptionItem(planId) {
 
 
 app.post("/api/auth/send-otp", async (req, res) => {
-  const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
-  if (!validIndianMobile(phone)) return res.status(400).json({ error: "Enter a valid 10-digit Indian mobile number." });
-  if (rateLimit("otp-send-ip:" + req.ip, 10, 60 * 60 * 1000) || rateLimit("otp-send-phone:" + phone, 3, 15 * 60 * 1000)) {
+  const method = req.body?.method === "email" ? "email" : req.body?.method === "phone" || req.body?.phone ? "phone" : "";
+  const identifier = typeof req.body?.identifier === "string"
+    ? req.body.identifier.trim()
+    : typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  const email = method === "email" ? identifier.toLowerCase() : "";
+  const phone = method === "phone" ? identifier : "";
+  if (!method) return res.status(400).json({ error: "Choose email or mobile verification." });
+  if (method === "phone" && !validIndianMobile(phone)) {
+    return res.status(400).json({ error: "Enter a valid 10-digit Indian mobile number." });
+  }
+  if (method === "email" && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email))) {
+    return res.status(400).json({ error: "Enter a valid email address." });
+  }
+  const channel = method === "email" ? "email" : "sms";
+  const destination = method === "email" ? email : "+91" + phone;
+  const rateKey = method + ":" + identifier.toLowerCase();
+  if (rateLimit("otp-send-ip:" + req.ip, 10, 60 * 60 * 1000) || rateLimit("otp-send:" + rateKey, 3, 15 * 60 * 1000)) {
     return res.status(429).json({ error: "Too many code requests. Wait before trying again." });
   }
   if (!twilioVerifyConfiguration()) {
-    return res.status(503).json({ error: "Mobile OTP delivery is not configured yet. Please try again later." });
+    return res.status(503).json({ error: "OTP delivery is not configured yet. Please try again later." });
   }
   try {
-    const result = await callTwilioVerify("Verifications", { To: "+91" + phone, Channel: "sms" });
+    const result = await callTwilioVerify("Verifications", { To: destination, Channel: channel });
     if (!result.ok) {
       console.error("OTP provider rejected a send request:", result.body.code || result.status);
-      return res.status(502).json({ error: "We could not send a code to that number. Check the number or try again later." });
+      return res.status(502).json({
+        error: method === "email"
+          ? "We could not email a code. Check the address and email setup, then try again."
+          : "We could not send a code to that number. Check the number or try again later.",
+      });
     }
-    return res.json({ sent: true, message: "A verification code was sent to your mobile." });
+    return res.json({ sent: true, message: method === "email" ? "A verification code was sent to your email." : "A verification code was sent to your mobile." });
   } catch (error) {
     console.error("OTP provider could not be reached:", error.message);
-    return res.status(502).json({ error: "Mobile verification is temporarily unavailable. Please try again." });
+    return res.status(502).json({ error: "Verification delivery is temporarily unavailable. Please try again." });
   }
 });
 
 app.post("/api/auth/verify-otp", async (req, res) => {
-  const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  const method = req.body?.method === "email" ? "email" : req.body?.method === "phone" || req.body?.phone ? "phone" : "";
+  const identifier = typeof req.body?.identifier === "string"
+    ? req.body.identifier.trim()
+    : typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  const email = method === "email" ? identifier.toLowerCase() : "";
+  const phone = method === "phone" ? identifier : "";
   const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
-  if (!validIndianMobile(phone)) return res.status(400).json({ error: "Enter a valid 10-digit Indian mobile number." });
-  if (!/^\d{4,10}$/.test(code)) return res.status(400).json({ error: "Enter the verification code from your SMS." });
-  if (rateLimit("otp-check-ip:" + req.ip, 20, 60 * 60 * 1000) || rateLimit("otp-check-phone:" + phone, 8, 15 * 60 * 1000)) {
+  if (!method) return res.status(400).json({ error: "Choose email or mobile verification." });
+  if (method === "phone" && !validIndianMobile(phone)) {
+    return res.status(400).json({ error: "Enter a valid 10-digit Indian mobile number." });
+  }
+  if (method === "email" && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email))) {
+    return res.status(400).json({ error: "Enter a valid email address." });
+  }
+  if (!/^\d{4,10}$/.test(code)) return res.status(400).json({ error: "Enter the verification code from your email or SMS." });
+  const channel = method === "email" ? "email" : "sms";
+  const destination = method === "email" ? email : "+91" + phone;
+  const rateKey = method + ":" + identifier.toLowerCase();
+  if (rateLimit("otp-check-ip:" + req.ip, 20, 60 * 60 * 1000) || rateLimit("otp-check:" + rateKey, 8, 15 * 60 * 1000)) {
     return res.status(429).json({ error: "Too many verification attempts. Wait before trying again." });
   }
   if (!twilioVerifyConfiguration()) {
-    return res.status(503).json({ error: "Mobile OTP delivery is not configured yet. Please try again later." });
+    return res.status(503).json({ error: "OTP delivery is not configured yet. Please try again later." });
   }
   try {
-    const verification = await callTwilioVerify("VerificationCheck", { To: "+91" + phone, Code: code });
+    const verification = await callTwilioVerify("VerificationCheck", { To: destination, Code: code });
     if (!verification.ok || verification.body.status !== "approved") {
       return res.status(400).json({ error: "That code is invalid or expired. Request a new code and try again." });
     }
-    const saved = await pool.query(
-      "INSERT INTO customer_accounts (phone) VALUES ($1) " +
-      "ON CONFLICT (phone) DO UPDATE SET updated_at = NOW() " +
-      "RETURNING id, BTRIM(phone) AS phone, COALESCE(full_name, '') AS name, COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin",
-      [phone],
-    );
+    let saved;
+    if (method === "email") {
+      saved = await pool.query(
+        "INSERT INTO customer_accounts (email) VALUES ($1) " +
+        "ON CONFLICT (email) DO UPDATE SET updated_at = NOW() " +
+        "RETURNING id, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
+        "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin",
+        [email],
+      );
+    } else {
+      saved = await pool.query(
+        "INSERT INTO customer_accounts (phone) VALUES ($1) " +
+        "ON CONFLICT (phone) DO UPDATE SET updated_at = NOW() " +
+        "RETURNING id, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
+        "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin",
+        [phone],
+      );
+    }
     const account = saved.rows[0];
-    await pool.query(
-      "UPDATE customer_orders SET customer_id = $1 WHERE BTRIM(phone) = $2 AND customer_id IS NULL",
-      [account.id, phone],
-    );
-    setCustomerCookie(res, createCustomerSessionToken(Number(account.id), phone));
+    if (phone) {
+      await pool.query(
+        "UPDATE customer_orders SET customer_id = $1 WHERE BTRIM(phone) = $2 AND customer_id IS NULL",
+        [account.id, phone],
+      );
+    }
+    setCustomerCookie(res, createCustomerSessionToken(Number(account.id), method, identifier.toLowerCase()));
     return res.json({ authenticated: true, profile: account });
   } catch (error) {
     console.error("Customer sign-in could not be completed:", error.message);
@@ -297,7 +344,7 @@ app.post("/api/auth/logout", (_req, res) => {
 app.get("/api/account/session", requireCustomer, async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, BTRIM(phone) AS phone, COALESCE(full_name, '') AS name, " +
+      "SELECT id, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
       "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin " +
       "FROM customer_accounts WHERE id = $1",
       [req.customerSession.customerId],
@@ -313,7 +360,7 @@ app.get("/api/account/session", requireCustomer, async (req, res) => {
 app.get("/api/account/profile", requireCustomer, async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, BTRIM(phone) AS phone, COALESCE(full_name, '') AS name, " +
+      "SELECT id, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
       "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin " +
       "FROM customer_accounts WHERE id = $1",
       [req.customerSession.customerId],
@@ -592,10 +639,12 @@ async function start() {
   await pool.query(
     "CREATE TABLE IF NOT EXISTS customer_accounts (" +
     "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, " +
-    "phone CHAR(10) NOT NULL UNIQUE, full_name VARCHAR(100), " +
+    "phone CHAR(10) UNIQUE, email VARCHAR(254) UNIQUE, full_name VARCHAR(100), " +
     "delivery_address VARCHAR(500), postal_code CHAR(6), " +
     "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
   );
+  await pool.query("ALTER TABLE customer_accounts ALTER COLUMN phone DROP NOT NULL");
+  await pool.query("ALTER TABLE customer_accounts ADD COLUMN IF NOT EXISTS email VARCHAR(254) UNIQUE");
   await pool.query(
     "ALTER TABLE customer_orders ADD COLUMN IF NOT EXISTS customer_id BIGINT REFERENCES customer_accounts(id) ON DELETE SET NULL"
   );
