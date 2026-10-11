@@ -119,12 +119,8 @@ function CustomerAccount({ onBack }) {
       const result = await accountRequest("/api/auth/verify-otp", {
         method: "POST", body: JSON.stringify({ method: "email", identifier: email, code: otp }),
       });
-      setAuthenticated(true);
-      setProfile(result.profile);
-      setEmail(result.profile.email || "");
-      setTab("General");
-      await loadAccount();
-      setMessage(method === "email" ? "Your email is verified. Complete your details and save your profile." : "Your mobile is verified. Complete your details and save your profile.");
+      window.location.assign("/customer");
+      return;
     } catch (error) { setMessage(error.message); }
     finally { setBusy(false); }
   };

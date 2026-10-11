@@ -317,7 +317,7 @@ app.get("/api/auth/phone-email/callback", async (req, res) => {
       [account.id, phone],
     );
     setCustomerCookie(res, createCustomerSessionToken(Number(account.id), "phone", phone));
-    return res.redirect(302, "/?account=1#home");
+    return res.redirect(302, "/customer#home");
   } catch (error) {
     console.error("Phone.email verification could not be completed:", error.message);
     return fail(error.message.includes("supports verified Indian") ? "unsupported-number" : "verification");
