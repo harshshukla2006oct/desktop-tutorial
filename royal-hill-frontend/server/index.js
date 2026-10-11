@@ -133,7 +133,7 @@ function readCustomerSessionToken(req) {
 
 function requireCustomer(req, res, next) {
   const session = readCustomerSessionToken(req);
-  if (!session) return res.status(401).json({ error: "Sign in with your verified email or mobile number." });
+  if (!session) return res.status(401).json({ error: "Sign in with your username and password." });
   req.customerSession = session;
   return next();
 }
@@ -320,8 +320,13 @@ app.get("/api/account/profile", requireCustomer, async (req, res) => {
 
 app.put("/api/account/profile", requireCustomer, async (req, res) => {
   const { name, address, pin } = req.body || {};
+  const rawPhone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  const phone = rawPhone || null;
   if (typeof name !== "string" || name.trim().length < 2 || name.trim().length > 100) {
     return res.status(400).json({ error: "Enter a name between 2 and 100 characters." });
+  }
+  if (phone && !/^\d{10}$/.test(phone)) {
+    return res.status(400).json({ error: "Enter a valid 10-digit mobile number or leave it blank." });
   }
   if (typeof address !== "string" || address.trim().length < 5 || address.trim().length > 500) {
     return res.status(400).json({ error: "Enter a delivery address between 5 and 500 characters." });
@@ -331,13 +336,14 @@ app.put("/api/account/profile", requireCustomer, async (req, res) => {
   }
   try {
     const result = await pool.query(
-      "UPDATE customer_accounts SET full_name = $1, delivery_address = $2, postal_code = $3, updated_at = NOW() " +
-      "WHERE id = $4 RETURNING id, BTRIM(phone) AS phone, full_name AS name, delivery_address AS address, postal_code AS pin",
-      [name.trim(), address.trim(), pin, req.customerSession.customerId],
+      "UPDATE customer_accounts SET phone = $1, full_name = $2, delivery_address = $3, postal_code = $4, updated_at = NOW() " +
+      "WHERE id = $5 RETURNING id, username, BTRIM(phone) AS phone, full_name AS name, delivery_address AS address, postal_code AS pin",
+      [phone, name.trim(), address.trim(), pin, req.customerSession.customerId],
     );
     if (!result.rowCount) return res.status(404).json({ error: "Customer account not found." });
     return res.json({ profile: result.rows[0] });
   } catch (error) {
+    if (error.code === "23505") return res.status(409).json({ error: "That mobile number is already saved to another account." });
     console.error("Customer profile could not be saved:", error.message);
     return res.status(500).json({ error: "Your details could not be saved." });
   }
