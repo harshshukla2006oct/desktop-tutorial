@@ -84,7 +84,7 @@ function App() {
   const [orderSubmitting, setOrderSubmitting] = useState(false);
   const [subscriptionPage, setSubscriptionPage] = useState("closed");
   const [selectedPlan, setSelectedPlan] = useState(null);
-  const [showAccount, setShowAccount] = useState(false);
+  const [showAccount, setShowAccount] = useState(() => new URLSearchParams(window.location.search).get("account") === "1");
 
   const visibleProducts = useMemo(() => products.filter((product) => {
     const matchesCategory = activeCategory === "All products" || product.category === activeCategory;

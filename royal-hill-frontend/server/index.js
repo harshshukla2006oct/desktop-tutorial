@@ -228,6 +228,102 @@ function calculateSubscriptionItem(planId) {
 }
 
 
+async function verifyPhoneEmailAccessToken(accessToken) {
+  if (!process.env.PHONE_EMAIL_CLIENT_ID) throw new Error("Phone verification is not configured.");
+  const payload = new FormData();
+  payload.append("access_token", accessToken);
+  payload.append("client_id", process.env.PHONE_EMAIL_CLIENT_ID);
+  const response = await fetch("https://eapi.phone.email/getuser", {
+    method: "POST",
+    body: payload,
+    signal: AbortSignal.timeout(10000),
+  });
+  let result = {};
+  try { result = await response.json(); } catch { result = {}; }
+  if (!response.ok || Number(result.status) !== 200) {
+    throw new Error("Phone.email did not confirm the phone verification.");
+  }
+  const countryCode = String(result.country_code || "").replace(/\D/g, "");
+  let phone = String(result.phone_no || "").replace(/\D/g, "");
+  if (phone.length === 12 && phone.startsWith("91")) phone = phone.slice(2);
+  if (countryCode !== "91" || !validIndianMobile(phone)) {
+    throw new Error("This account currently supports verified Indian mobile numbers only.");
+  }
+  return phone;
+}
+
+function clearPhoneEmailStateCookie(res) {
+  res.clearCookie("royal_hill_phone_email_state", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/api/auth/phone-email/callback",
+  });
+}
+
+app.get("/api/auth/phone-email/start", (req, res) => {
+  if (!process.env.PHONE_EMAIL_CLIENT_ID) {
+    return res.redirect(302, "/?account=1&phoneEmailError=setup#home");
+  }
+  const redirectUrl = process.env.PHONE_EMAIL_REDIRECT_URL ||
+    (process.env.NODE_ENV === "production"
+      ? "https://royal-hill-storefront.onrender.com/api/auth/phone-email/callback"
+      : "http://localhost:5000/api/auth/phone-email/callback");
+  const state = crypto.randomBytes(24).toString("hex");
+  res.cookie("royal_hill_phone_email_state", state, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 5 * 60 * 1000,
+    path: "/api/auth/phone-email/callback",
+  });
+  const callback = new URL(redirectUrl);
+  callback.searchParams.set("state", state);
+  const authUrl = new URL("https://www.phone.email/auth/log-in");
+  authUrl.searchParams.set("client_id", process.env.PHONE_EMAIL_CLIENT_ID);
+  authUrl.searchParams.set("redirect_url", callback.toString());
+  return res.redirect(302, authUrl.toString());
+});
+
+app.get("/api/auth/phone-email/callback", async (req, res) => {
+  const cookiePair = (req.headers.cookie || "").split(";").map((part) => part.trim())
+    .find((part) => part.startsWith("royal_hill_phone_email_state="));
+  const stateCookie = cookiePair ? decodeURIComponent(cookiePair.split("=").slice(1).join("=")) : "";
+  const stateQuery = typeof req.query.state === "string" ? req.query.state : "";
+  const accessToken = typeof req.query.access_token === "string" ? req.query.access_token : "";
+  const fail = (reason = "verification") => {
+    clearPhoneEmailStateCookie(res);
+    return res.redirect(302, "/?account=1&phoneEmailError=" + encodeURIComponent(reason) + "#home");
+  };
+  if (!stateCookie || !stateQuery || stateCookie !== stateQuery || !accessToken || accessToken.length > 4096) {
+    return fail();
+  }
+  clearPhoneEmailStateCookie(res);
+  if (rateLimit("phone-email-callback-ip:" + req.ip, 20, 60 * 60 * 1000)) {
+    return fail("rate-limit");
+  }
+  try {
+    const phone = await verifyPhoneEmailAccessToken(accessToken);
+    const saved = await pool.query(
+      "INSERT INTO customer_accounts (phone) VALUES ($1) " +
+      "ON CONFLICT (phone) DO UPDATE SET updated_at = NOW() " +
+      "RETURNING id, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
+      "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin",
+      [phone],
+    );
+    const account = saved.rows[0];
+    await pool.query(
+      "UPDATE customer_orders SET customer_id = $1 WHERE BTRIM(phone) = $2 AND customer_id IS NULL",
+      [account.id, phone],
+    );
+    setCustomerCookie(res, createCustomerSessionToken(Number(account.id), "phone", phone));
+    return res.redirect(302, "/?account=1#home");
+  } catch (error) {
+    console.error("Phone.email verification could not be completed:", error.message);
+    return fail(error.message.includes("supports verified Indian") ? "unsupported-number" : "verification");
+  }
+});
+
 app.post("/api/auth/send-otp", async (req, res) => {
   const method = req.body?.method === "email" ? "email" : req.body?.method === "phone" || req.body?.phone ? "phone" : "";
   const identifier = typeof req.body?.identifier === "string"

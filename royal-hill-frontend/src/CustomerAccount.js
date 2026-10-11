@@ -29,13 +29,18 @@ async function accountRequest(path, options = {}) {
 function CustomerAccount({ onBack }) {
   const [loading, setLoading] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
-  const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [method, setMethod] = useState("email");
   const [otp, setOtp] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(() => {
+    const reason = new URLSearchParams(window.location.search).get("phoneEmailError");
+    if (reason === "setup") return "Phone verification is not configured yet. Please contact us for help.";
+    if (reason === "unsupported-number") return "Phone verification currently supports Indian mobile numbers only.";
+    if (reason === "rate-limit") return "Too many sign-in attempts. Please wait and try again.";
+    return reason ? "Phone verification could not be completed. Please try again." : "";
+  });
   const [tab, setTab] = useState("General");
   const [profile, setProfile] = useState({ name: "", phone: "", email: "", address: "", pin: "" });
   const [dailyOrders, setDailyOrders] = useState([]);
@@ -47,7 +52,6 @@ function CustomerAccount({ onBack }) {
   const loadAccount = async () => {
     const result = await accountRequest("/api/account/session");
     setProfile(result.profile);
-    setPhone(result.profile.phone || "");
     setEmail(result.profile.email || "");
     const daily = await accountRequest("/api/account/daily-orders");
     setDailyOrders(daily.entries);
@@ -64,7 +68,6 @@ function CustomerAccount({ onBack }) {
         if (!current) return;
         setAuthenticated(true);
         setProfile(result.profile);
-        setPhone(result.profile.phone || "");
         setEmail(result.profile.email || "");
         const [daily, orders] = await Promise.all([
           accountRequest("/api/account/daily-orders"),
@@ -81,12 +84,27 @@ function CustomerAccount({ onBack }) {
     return () => { current = false; };
   }, []);
 
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("account") || url.searchParams.has("phoneEmailError")) {
+      url.searchParams.delete("account");
+      url.searchParams.delete("phoneEmailError");
+      window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+    }
+  }, []);
+
+  const startPhoneEmail = () => {
+    setBusy(true);
+    setMessage("");
+    window.location.assign("/api/auth/phone-email/start");
+  };
+
   const sendOtp = async (event) => {
     event.preventDefault();
     setBusy(true); setMessage("");
     try {
       const result = await accountRequest("/api/auth/send-otp", {
-        method: "POST", body: JSON.stringify({ method, identifier: method === "email" ? email : phone }),
+        method: "POST", body: JSON.stringify({ method: "email", identifier: email }),
       });
       setOtpSent(true);
       setMessage(result.message || "A verification code was sent to your mobile.");
@@ -99,15 +117,14 @@ function CustomerAccount({ onBack }) {
     setBusy(true); setMessage("");
     try {
       const result = await accountRequest("/api/auth/verify-otp", {
-        method: "POST", body: JSON.stringify({ method, identifier: method === "email" ? email : phone, code: otp }),
+        method: "POST", body: JSON.stringify({ method: "email", identifier: email, code: otp }),
       });
       setAuthenticated(true);
       setProfile(result.profile);
-      setPhone(result.profile.phone || "");
       setEmail(result.profile.email || "");
       setTab("General");
       await loadAccount();
-      setMessage("Your mobile is verified. Complete your details and save your profile.");
+      setMessage(method === "email" ? "Your email is verified. Complete your details and save your profile." : "Your mobile is verified. Complete your details and save your profile.");
     } catch (error) { setMessage(error.message); }
     finally { setBusy(false); }
   };
@@ -200,31 +217,32 @@ function CustomerAccount({ onBack }) {
       {!authenticated ? (
         <section className="account-login-card">
           <p className="eyebrow">YOUR ROYAL HILL ACCOUNT</p>
-          <h1>{otpSent ? "Verify your mobile" : "Login or create an account"}</h1>
+          <h1>{otpSent ? "Verify your email" : "Login or create an account"}</h1>
           <p className="account-intro">Sign in or register using a one-time code sent to your email or mobile.</p>
           {!otpSent && <div className="account-method-picker" role="group" aria-label="Verification method">
             <button type="button" className={method === "email" ? "selected" : ""} onClick={() => { setMethod("email"); setOtp(""); setMessage(""); }}>Email</button>
-            <button type="button" className={method === "phone" ? "selected" : ""} onClick={() => { setMethod("phone"); setOtp(""); setMessage(""); }}>Mobile SMS</button>
+            <button type="button" className={method === "phone" ? "selected" : ""} onClick={() => { setMethod("phone"); setOtp(""); setOtpSent(false); setMessage(""); }}>Phone verification</button>
           </div>}
           {!otpSent ? (
-            <form className="account-login-form" onSubmit={sendOtp}>
-              {method === "email" ? (
+            method === "email" ? (
+              <form className="account-login-form" onSubmit={sendOtp}>
                 <label>Email address<input type="email" autoComplete="email" maxLength="254" value={email} onChange={(event) => setEmail(event.target.value.trim())} placeholder="you@example.com" required /></label>
-              ) : (
-                <label>Mobile number <span className="account-country-code">+91</span>
-                  <input aria-label="10-digit mobile number" inputMode="numeric" autoComplete="tel-national" maxLength="10" pattern="[6-9][0-9]{9}" value={phone} onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="10-digit mobile number" required />
-                </label>
-              )}
-              <button className="checkout-primary" disabled={busy}>{busy ? "Sending code…" : "Send verification code"} <span>→</span></button>
-            </form>
+                <button className="checkout-primary" disabled={busy}>{busy ? "Sending code…" : "Send email code"} <span>→</span></button>
+              </form>
+            ) : (
+              <div className="account-login-form">
+                <p className="account-section-note">Phone.email will verify your mobile number securely, then connect it to your Royal Hill account.</p>
+                <button type="button" className="checkout-primary" disabled={busy} onClick={startPhoneEmail}>Continue with Phone.email <span>→</span></button>
+              </div>
+            )
           ) : (
             <form className="account-login-form" onSubmit={verifyOtp}>
               <label>Verification code
-                <input inputMode="numeric" autoComplete="one-time-code" maxLength="10" value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="Enter the code from SMS" required />
+                <input inputMode="numeric" autoComplete="one-time-code" maxLength="10" value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="Enter the code from your email" required />
               </label>
               <div className="account-otp-actions">
                 <button className="checkout-primary" disabled={busy}>{busy ? "Verifying…" : "Verify and continue"} <span>→</span></button>
-                <button type="button" className="account-text-button" disabled={busy} onClick={() => { setOtpSent(false); setOtp(""); setMessage(""); }}>Change number</button>
+                <button type="button" className="account-text-button" disabled={busy} onClick={() => { setOtpSent(false); setOtp(""); setMessage(""); }}>Change email</button>
               </div>
             </form>
           )}
@@ -248,7 +266,7 @@ function CustomerAccount({ onBack }) {
                 <p className="eyebrow">ROYAL HILL MEMBERSHIP</p>
                 <h1>{tab === "General" ? "General" : tab === "Daily order" ? "Daily delivery" : "Orders history"}</h1>
               </div>
-              <span className="account-verified-badge">✓ Mobile verified</span>
+              <span className="account-verified-badge">{profile.phone ? "✓ Mobile verified" : "✓ Email verified"}</span>
             </div>
 
             {tab === "General" && (
