@@ -124,7 +124,7 @@ function readCustomerSessionToken(req) {
     const actual = Buffer.from(signature, "base64url");
     if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return null;
     const session = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    if (session.role !== "customer" || !Number.isSafeInteger(session.customerId) || session.exp <= Math.floor(Date.now() / 1000)) return null;
+    if (session.role !== "customer" || session.loginMethod !== "username" || !Number.isSafeInteger(session.customerId) || session.exp <= Math.floor(Date.now() / 1000)) return null;
     return session;
   } catch {
     return null;
@@ -138,30 +138,6 @@ function requireCustomer(req, res, next) {
   return next();
 }
 
-function validIndianMobile(phone) {
-  return typeof phone === "string" && /^[6-9]\d{9}$/.test(phone);
-}
-
-function twilioVerifyConfiguration() {
-  return process.env.TWILIO_API_KEY && process.env.TWILIO_API_SECRET && process.env.TWILIO_VERIFY_SERVICE_SID;
-}
-
-async function callTwilioVerify(action, values) {
-  const serviceSid = process.env.TWILIO_VERIFY_SERVICE_SID;
-  const credentials = Buffer.from(process.env.TWILIO_API_KEY + ":" + process.env.TWILIO_API_SECRET).toString("base64");
-  const response = await fetch("https://verify.twilio.com/v2/Services/" + encodeURIComponent(serviceSid) + "/" + action, {
-    method: "POST",
-    headers: {
-      Authorization: "Basic " + credentials,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams(values),
-  });
-  let body = {};
-  try { body = await response.json(); } catch { body = {}; }
-  return { ok: response.ok, status: response.status, body };
-}
-
 function setCustomerCookie(res, token) {
   res.cookie(customerSessionCookie, token, {
     httpOnly: true,
@@ -170,6 +146,29 @@ function setCustomerCookie(res, token) {
     maxAge: sessionLifetimeSeconds * 1000,
     path: "/",
   });
+}
+
+function normalizeUsername(value) {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function validUsername(username) {
+  return /^[a-z0-9_]{3,24}$/.test(username);
+}
+
+function hashCustomerPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
+  return salt + ":" + hash;
+}
+
+function verifyCustomerPassword(password, storedHash) {
+  if (typeof storedHash !== "string") return false;
+  const [salt, encodedHash] = storedHash.split(":");
+  if (!/^[a-f0-9]{32}$/.test(salt || "") || !/^[a-f0-9]{128}$/.test(encodedHash || "")) return false;
+  const expected = Buffer.from(encodedHash, "hex");
+  const actual = crypto.scryptSync(password, salt, expected.length);
+  return crypto.timingSafeEqual(actual, expected);
 }
 
 function requireAdmin(req, res, next) {
@@ -228,202 +227,52 @@ function calculateSubscriptionItem(planId) {
 }
 
 
-async function verifyPhoneEmailAccessToken(accessToken) {
-  if (!process.env.PHONE_EMAIL_CLIENT_ID) throw new Error("Phone verification is not configured.");
-  const payload = new FormData();
-  payload.append("access_token", accessToken);
-  payload.append("client_id", process.env.PHONE_EMAIL_CLIENT_ID);
-  const response = await fetch("https://eapi.phone.email/getuser", {
-    method: "POST",
-    body: payload,
-    signal: AbortSignal.timeout(10000),
-  });
-  let result = {};
-  try { result = await response.json(); } catch { result = {}; }
-  if (!response.ok || Number(result.status) !== 200) {
-    throw new Error("Phone.email did not confirm the phone verification.");
-  }
-  const countryCode = String(result.country_code || "").replace(/\D/g, "");
-  let phone = String(result.phone_no || "").replace(/\D/g, "");
-  if (phone.length === 12 && phone.startsWith("91")) phone = phone.slice(2);
-  if (countryCode !== "91" || !validIndianMobile(phone)) {
-    throw new Error("This account currently supports verified Indian mobile numbers only.");
-  }
-  return phone;
-}
-
-function clearPhoneEmailStateCookie(res) {
-  res.clearCookie("royal_hill_phone_email_state", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/api/auth/phone-email/callback",
-  });
-}
-
-app.get("/api/auth/phone-email/start", (req, res) => {
-  if (!process.env.PHONE_EMAIL_CLIENT_ID) {
-    return res.redirect(302, "/?account=1&phoneEmailError=setup#home");
-  }
-  const redirectUrl = process.env.PHONE_EMAIL_REDIRECT_URL ||
-    (process.env.NODE_ENV === "production"
-      ? "https://royal-hill-storefront.onrender.com/api/auth/phone-email/callback"
-      : "http://localhost:5000/api/auth/phone-email/callback");
-  const state = crypto.randomBytes(24).toString("hex");
-  res.cookie("royal_hill_phone_email_state", state, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    maxAge: 5 * 60 * 1000,
-    path: "/api/auth/phone-email/callback",
-  });
-  const callback = new URL(redirectUrl);
-  callback.searchParams.set("state", state);
-  const authUrl = new URL("https://www.phone.email/auth/log-in");
-  authUrl.searchParams.set("client_id", process.env.PHONE_EMAIL_CLIENT_ID);
-  authUrl.searchParams.set("redirect_url", callback.toString());
-  return res.redirect(302, authUrl.toString());
-});
-
-app.get("/api/auth/phone-email/callback", async (req, res) => {
-  const cookiePair = (req.headers.cookie || "").split(";").map((part) => part.trim())
-    .find((part) => part.startsWith("royal_hill_phone_email_state="));
-  const stateCookie = cookiePair ? decodeURIComponent(cookiePair.split("=").slice(1).join("=")) : "";
-  const stateQuery = typeof req.query.state === "string" ? req.query.state : "";
-  const accessToken = typeof req.query.access_token === "string" ? req.query.access_token : "";
-  const fail = (reason = "verification") => {
-    clearPhoneEmailStateCookie(res);
-    return res.redirect(302, "/?account=1&phoneEmailError=" + encodeURIComponent(reason) + "#home");
-  };
-  if (!stateCookie || !stateQuery || stateCookie !== stateQuery || !accessToken || accessToken.length > 4096) {
-    return fail();
-  }
-  clearPhoneEmailStateCookie(res);
-  if (rateLimit("phone-email-callback-ip:" + req.ip, 20, 60 * 60 * 1000)) {
-    return fail("rate-limit");
+app.post("/api/auth/register", async (req, res) => {
+  const username = normalizeUsername(req.body?.username);
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  if (!validUsername(username)) return res.status(400).json({ error: "Username must be 3–24 characters using letters, numbers, or underscores." });
+  if (password.length < 8 || password.length > 128) return res.status(400).json({ error: "Password must be at least 8 characters." });
+  if (rateLimit("customer-auth-ip:" + req.ip, 20, 60 * 60 * 1000) || rateLimit("customer-register:" + username, 5, 60 * 60 * 1000)) {
+    return res.status(429).json({ error: "Too many attempts. Please wait and try again." });
   }
   try {
-    const phone = await verifyPhoneEmailAccessToken(accessToken);
     const saved = await pool.query(
-      "INSERT INTO customer_accounts (phone) VALUES ($1) " +
-      "ON CONFLICT (phone) DO UPDATE SET updated_at = NOW() " +
-      "RETURNING id, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
+      "INSERT INTO customer_accounts (username, password_hash) VALUES ($1, $2) " +
+      "RETURNING id, username, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
       "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin",
-      [phone],
+      [username, hashCustomerPassword(password)],
     );
-    const account = saved.rows[0];
-    await pool.query(
-      "UPDATE customer_orders SET customer_id = $1 WHERE BTRIM(phone) = $2 AND customer_id IS NULL",
-      [account.id, phone],
-    );
-    setCustomerCookie(res, createCustomerSessionToken(Number(account.id), "phone", phone));
-    return res.redirect(302, "/customer#home");
+    const profile = saved.rows[0];
+    setCustomerCookie(res, createCustomerSessionToken(Number(profile.id), "username", username));
+    return res.status(201).json({ authenticated: true, profile });
   } catch (error) {
-    console.error("Phone.email verification could not be completed:", error.message);
-    return fail(error.message.includes("supports verified Indian") ? "unsupported-number" : "verification");
+    if (error.code === "23505") return res.status(409).json({ error: "That username is already taken. Choose a different one." });
+    console.error("Customer account could not be created:", error.message);
+    return res.status(500).json({ error: "We could not create your account. Please try again." });
   }
 });
 
-app.post("/api/auth/send-otp", async (req, res) => {
-  const method = req.body?.method === "email" ? "email" : req.body?.method === "phone" || req.body?.phone ? "phone" : "";
-  const identifier = typeof req.body?.identifier === "string"
-    ? req.body.identifier.trim()
-    : typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
-  const email = method === "email" ? identifier.toLowerCase() : "";
-  const phone = method === "phone" ? identifier : "";
-  if (!method) return res.status(400).json({ error: "Choose email or mobile verification." });
-  if (method === "phone" && !validIndianMobile(phone)) {
-    return res.status(400).json({ error: "Enter a valid 10-digit Indian mobile number." });
-  }
-  if (method === "email" && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email))) {
-    return res.status(400).json({ error: "Enter a valid email address." });
-  }
-  const channel = method === "email" ? "email" : "sms";
-  const destination = method === "email" ? email : "+91" + phone;
-  const rateKey = method + ":" + identifier.toLowerCase();
-  if (rateLimit("otp-send-ip:" + req.ip, 10, 60 * 60 * 1000) || rateLimit("otp-send:" + rateKey, 3, 15 * 60 * 1000)) {
-    return res.status(429).json({ error: "Too many code requests. Wait before trying again." });
-  }
-  if (!twilioVerifyConfiguration()) {
-    return res.status(503).json({ error: "OTP delivery is not configured yet. Please try again later." });
+app.post("/api/auth/login", async (req, res) => {
+  const username = normalizeUsername(req.body?.username);
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  if (!validUsername(username) || !password || password.length > 128) return res.status(401).json({ error: "Username or password is incorrect." });
+  if (rateLimit("customer-auth-ip:" + req.ip, 20, 60 * 60 * 1000) || rateLimit("customer-login:" + username, 8, 15 * 60 * 1000)) {
+    return res.status(429).json({ error: "Too many sign-in attempts. Please wait and try again." });
   }
   try {
-    const result = await callTwilioVerify("Verifications", { To: destination, Channel: channel });
-    if (!result.ok) {
-      console.error("OTP provider rejected a send request:", result.body.code || result.status);
-      return res.status(502).json({
-        error: method === "email"
-          ? "We could not email a code. Check the address and email setup, then try again."
-          : "We could not send a code to that number. Check the number or try again later.",
-      });
-    }
-    return res.json({ sent: true, message: method === "email" ? "A verification code was sent to your email." : "A verification code was sent to your mobile." });
-  } catch (error) {
-    console.error("OTP provider could not be reached:", error.message);
-    return res.status(502).json({ error: "Verification delivery is temporarily unavailable. Please try again." });
-  }
-});
-
-app.post("/api/auth/verify-otp", async (req, res) => {
-  const method = req.body?.method === "email" ? "email" : req.body?.method === "phone" || req.body?.phone ? "phone" : "";
-  const identifier = typeof req.body?.identifier === "string"
-    ? req.body.identifier.trim()
-    : typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
-  const email = method === "email" ? identifier.toLowerCase() : "";
-  const phone = method === "phone" ? identifier : "";
-  const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
-  if (!method) return res.status(400).json({ error: "Choose email or mobile verification." });
-  if (method === "phone" && !validIndianMobile(phone)) {
-    return res.status(400).json({ error: "Enter a valid 10-digit Indian mobile number." });
-  }
-  if (method === "email" && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email))) {
-    return res.status(400).json({ error: "Enter a valid email address." });
-  }
-  if (!/^\d{4,10}$/.test(code)) return res.status(400).json({ error: "Enter the verification code from your email or SMS." });
-  const channel = method === "email" ? "email" : "sms";
-  const destination = method === "email" ? email : "+91" + phone;
-  const rateKey = method + ":" + identifier.toLowerCase();
-  if (rateLimit("otp-check-ip:" + req.ip, 20, 60 * 60 * 1000) || rateLimit("otp-check:" + rateKey, 8, 15 * 60 * 1000)) {
-    return res.status(429).json({ error: "Too many verification attempts. Wait before trying again." });
-  }
-  if (!twilioVerifyConfiguration()) {
-    return res.status(503).json({ error: "OTP delivery is not configured yet. Please try again later." });
-  }
-  try {
-    const verification = await callTwilioVerify("VerificationCheck", { To: destination, Code: code });
-    if (!verification.ok || verification.body.status !== "approved") {
-      return res.status(400).json({ error: "That code is invalid or expired. Request a new code and try again." });
-    }
-    let saved;
-    if (method === "email") {
-      saved = await pool.query(
-        "INSERT INTO customer_accounts (email) VALUES ($1) " +
-        "ON CONFLICT (email) DO UPDATE SET updated_at = NOW() " +
-        "RETURNING id, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
-        "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin",
-        [email],
-      );
-    } else {
-      saved = await pool.query(
-        "INSERT INTO customer_accounts (phone) VALUES ($1) " +
-        "ON CONFLICT (phone) DO UPDATE SET updated_at = NOW() " +
-        "RETURNING id, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
-        "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin",
-        [phone],
-      );
-    }
-    const account = saved.rows[0];
-    if (phone) {
-      await pool.query(
-        "UPDATE customer_orders SET customer_id = $1 WHERE BTRIM(phone) = $2 AND customer_id IS NULL",
-        [account.id, phone],
-      );
-    }
-    setCustomerCookie(res, createCustomerSessionToken(Number(account.id), method, identifier.toLowerCase()));
-    return res.json({ authenticated: true, profile: account });
+    const result = await pool.query("SELECT id, password_hash FROM customer_accounts WHERE username = $1", [username]);
+    const account = result.rows[0];
+    if (!account || !verifyCustomerPassword(password, account.password_hash)) return res.status(401).json({ error: "Username or password is incorrect." });
+    const saved = await pool.query(
+      "SELECT id, username, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
+      "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin FROM customer_accounts WHERE id = $1",
+      [account.id],
+    );
+    setCustomerCookie(res, createCustomerSessionToken(Number(account.id), "username", username));
+    return res.json({ authenticated: true, profile: saved.rows[0] });
   } catch (error) {
     console.error("Customer sign-in could not be completed:", error.message);
-    return res.status(500).json({ error: "We could not finish signing you in. Please try again." });
+    return res.status(500).json({ error: "We could not sign you in. Please try again." });
   }
 });
 
@@ -440,7 +289,7 @@ app.post("/api/auth/logout", (_req, res) => {
 app.get("/api/account/session", requireCustomer, async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
+      "SELECT id, username, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
       "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin " +
       "FROM customer_accounts WHERE id = $1",
       [req.customerSession.customerId],
@@ -456,7 +305,7 @@ app.get("/api/account/session", requireCustomer, async (req, res) => {
 app.get("/api/account/profile", requireCustomer, async (req, res) => {
   try {
     const result = await pool.query(
-      "SELECT id, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
+      "SELECT id, username, BTRIM(phone) AS phone, COALESCE(email, '') AS email, COALESCE(full_name, '') AS name, " +
       "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin " +
       "FROM customer_accounts WHERE id = $1",
       [req.customerSession.customerId],
@@ -735,11 +584,14 @@ async function start() {
   await pool.query(
     "CREATE TABLE IF NOT EXISTS customer_accounts (" +
     "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, " +
-    "phone CHAR(10) UNIQUE, email VARCHAR(254) UNIQUE, full_name VARCHAR(100), " +
+    "phone CHAR(10) UNIQUE, email VARCHAR(254) UNIQUE, username VARCHAR(32), password_hash TEXT, full_name VARCHAR(100), " +
     "delivery_address VARCHAR(500), postal_code CHAR(6), " +
     "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
   );
   await pool.query("ALTER TABLE customer_accounts ALTER COLUMN phone DROP NOT NULL");
+  await pool.query("ALTER TABLE customer_accounts ADD COLUMN IF NOT EXISTS username VARCHAR(32)");
+  await pool.query("ALTER TABLE customer_accounts ADD COLUMN IF NOT EXISTS password_hash TEXT");
+  await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS customer_accounts_username_ci_idx ON customer_accounts (LOWER(username)) WHERE username IS NOT NULL");
   await pool.query("ALTER TABLE customer_accounts ADD COLUMN IF NOT EXISTS email VARCHAR(254) UNIQUE");
   await pool.query(
     "ALTER TABLE customer_orders ADD COLUMN IF NOT EXISTS customer_id BIGINT REFERENCES customer_accounts(id) ON DELETE SET NULL"
