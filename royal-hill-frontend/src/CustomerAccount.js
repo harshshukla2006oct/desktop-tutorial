@@ -26,6 +26,10 @@ async function accountRequest(path, options = {}) {
   return result;
 }
 
+const getLocalDateKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+const getMonthKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+const getDateFromKey = (key) => { const [year, month, day] = key.split("-").map(Number); return new Date(year, month - 1, day); };
+
 function CustomerAccount({ onBack }) {
   const [loading, setLoading] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
@@ -42,6 +46,9 @@ function CustomerAccount({ onBack }) {
   const [historyOffset, setHistoryOffset] = useState(0);
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [newItem, setNewItem] = useState({ productId: "1", size: "1 L", quantity: 1 });
+  const [calendarMonth, setCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [selectedSubscriptionDate, setSelectedSubscriptionDate] = useState(() => getLocalDateKey(new Date()));
+  const [subscriptionDays, setSubscriptionDays] = useState([]);
 
   useEffect(() => {
     let current = true;
@@ -64,6 +71,15 @@ function CustomerAccount({ onBack }) {
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
   }, []);
+
+  useEffect(() => {
+    if (!authenticated) return undefined;
+    let current = true;
+    accountRequest("/api/account/subscription-days?month=" + getMonthKey(calendarMonth))
+      .then((result) => { if (current) setSubscriptionDays(result.entries || []); })
+      .catch((error) => { if (current) setMessage(error.message); });
+    return () => { current = false; };
+  }, [authenticated, calendarMonth]);
 
   useEffect(() => {
     const url = new URL(window.location.href);
@@ -156,10 +172,36 @@ function CustomerAccount({ onBack }) {
 
   const logout = async () => {
     setBusy(true);
-    try { await accountRequest("/api/auth/logout", { method: "POST" }); }
-    catch (error) { setMessage(error.message); }
-    setAuthenticated(false); setPassword(""); setConfirmPassword(""); setProfile({ name: "", phone: "", email: "", username: "", address: "", pin: "" }); setBusy(false);
+    try {
+      await accountRequest("/api/auth/logout", { method: "POST" });
+      window.location.assign("/");
+    } catch (error) { setMessage(error.message); setBusy(false); }
   };
+
+
+  const saveSubscriptionStatus = async (status) => {
+    if (selectedSubscriptionDate < getLocalDateKey(new Date())) return;
+    if (status === "on" && !dailyOrders.some((entry) => entry.is_active && accountProducts.find((product) => product.id === Number(entry.product_id))?.milk)) {
+      setMessage("Add an active milk item in Daily order before scheduling a delivery.");
+      return;
+    }
+    setBusy(true); setMessage("");
+    try {
+      const result = await accountRequest("/api/account/subscription-days/" + selectedSubscriptionDate, {
+        method: "PUT", body: JSON.stringify({ status }),
+      });
+      setSubscriptionDays((entries) => [...entries.filter((entry) => String(entry.delivery_date).slice(0, 10) !== selectedSubscriptionDate), result.entry]);
+      setMessage(status === "on" ? "Milk delivery scheduled for this day." : "Milk delivery cancelled for this day.");
+    } catch (error) { setMessage(error.message); }
+    finally { setBusy(false); }
+  };
+
+  const todayKey = getLocalDateKey(new Date());
+  const selectedDay = subscriptionDays.find((entry) => String(entry.delivery_date).slice(0, 10) === selectedSubscriptionDate);
+  const activeMilkItems = dailyOrders.filter((entry) => entry.is_active && accountProducts.find((product) => product.id === Number(entry.product_id))?.milk);
+  const calendarStart = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+  const calendarDayCount = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0).getDate();
+  const calendarCells = [...Array((calendarStart.getDay() + 6) % 7).fill(null), ...Array.from({ length: calendarDayCount }, (_, index) => new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), index + 1))];
 
   const changeNewProduct = (productId) => {
     const nextSize = sizesFor(productId)[0];
@@ -212,9 +254,9 @@ function CustomerAccount({ onBack }) {
         <div className="customer-account-layout">
           <aside className="customer-account-nav">
             <p className="account-nav-title">MY ACCOUNT</p>
-            {["General", "Daily order", "Orders history"].map((name) => (
+            {["General", "Daily order", "Your subscription", "Orders history"].map((name) => (
               <button key={name} className={tab === name ? "active" : ""} onClick={() => { setTab(name); setMessage(""); }}>
-                <span>{name === "General" ? "◉" : name === "Daily order" ? "↻" : "▤"}</span>{name}
+                <span>{name === "General" ? "◉" : name === "Daily order" ? "↻" : name === "Your subscription" ? "▦" : "▤"}</span>{name}
               </button>
             ))}
             <button className="account-logout-button" disabled={busy} onClick={logout}><span>↪</span>Log out</button>
@@ -223,7 +265,7 @@ function CustomerAccount({ onBack }) {
             <div className="account-content-heading">
               <div>
                 <p className="eyebrow">ROYAL HILL MEMBERSHIP</p>
-                <h1>{tab === "General" ? "General" : tab === "Daily order" ? "Daily delivery" : "Orders history"}</h1>
+                <h1>{tab === "General" ? "General" : tab === "Daily order" ? "Daily delivery" : tab === "Your subscription" ? "Your subscription" : "Orders history"}</h1>
               </div>
               <span className="account-verified-badge">{"@" + profile.username}</span>
             </div>
@@ -238,6 +280,52 @@ function CustomerAccount({ onBack }) {
                 <label>PIN code<input name="pin" inputMode="numeric" autoComplete="postal-code" pattern="[0-9]{6}" maxLength="6" value={profile.pin} onChange={(event) => setProfile((current) => ({ ...current, pin: event.target.value.replace(/\D/g, "").slice(0, 6) }))} placeholder="6-digit PIN code" required /></label>
                 <div className="account-form-actions"><button className="checkout-primary" disabled={busy}>{busy ? "Saving…" : "Save details"} <span>✓</span></button></div>
               </form>
+            )}
+
+
+            {tab === "Your subscription" && (
+              <div className="account-subscription-section">
+                <div className="account-section-heading"><div><h2>Choose your milk delivery days</h2><p>Each new day starts ON. Turn a day OFF to cancel that delivery.</p></div></div>
+                <div className="subscription-calendar-layout">
+                  <section className="subscription-calendar-card" aria-label="Delivery calendar">
+                    <div className="subscription-calendar-heading">
+                      <button type="button" aria-label="Previous month" onClick={() => setCalendarMonth((month) => new Date(month.getFullYear(), month.getMonth() - 1, 1))}>‹</button>
+                      <h3>{calendarMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h3>
+                      <button type="button" aria-label="Next month" onClick={() => setCalendarMonth((month) => new Date(month.getFullYear(), month.getMonth() + 1, 1))}>›</button>
+                    </div>
+                    <div className="subscription-calendar-grid subscription-calendar-weekdays">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => <span key={day}>{day}</span>)}</div>
+                    <div className="subscription-calendar-grid">
+                      {calendarCells.map((date, index) => {
+                        if (!date) return <span className="subscription-calendar-blank" key={"blank-" + index} />;
+                        const dateKey = getLocalDateKey(date);
+                        const savedDay = subscriptionDays.find((entry) => String(entry.delivery_date).slice(0, 10) === dateKey);
+                        const defaultOn = dateKey >= todayKey && activeMilkItems.length > 0;
+                        const status = savedDay?.status || (defaultOn ? "on" : "");
+                        const isSelected = selectedSubscriptionDate === dateKey;
+                        return (
+                          <button type="button" key={dateKey} className={"subscription-calendar-day " + (isSelected ? "selected " : "") + (status ? status : "") + (dateKey === todayKey ? " today" : "")} onClick={() => { setSelectedSubscriptionDate(dateKey); setMessage(""); }} aria-label={date.toLocaleDateString(undefined, { dateStyle: "full" }) + (status === "on" ? ", delivery on" : status === "off" ? ", delivery cancelled" : "")}>
+                            <span>{date.getDate()}</span>{status === "on" ? <b className="calendar-mark" aria-label="Scheduled">✓</b> : status === "off" ? <b className="calendar-mark" aria-label="Cancelled">×</b> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="subscription-calendar-legend"><span><b className="legend-on">✓</b> Delivery ON</span><span><b className="legend-off">×</b> Delivery OFF</span></div>
+                  </section>
+                  <section className="subscription-day-card">
+                    <p className="eyebrow">DELIVERY PREFERENCE</p>
+                    <h3>{getDateFromKey(selectedSubscriptionDate).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</h3>
+                    <p className="subscription-day-caption">{selectedDay?.status === "off" ? "You cancelled milk for this day." : selectedDay?.status === "on" ? "Milk delivery is scheduled for this day." : selectedSubscriptionDate < todayKey ? "No saved delivery choice for this day." : "New days start ON automatically."}</p>
+                    <div className="subscription-toggle" role="group" aria-label="Milk delivery for selected day">
+                      <button type="button" className={(selectedDay?.status !== "off" ? "active on" : "")} disabled={busy || selectedSubscriptionDate < todayKey || (!activeMilkItems.length && selectedDay?.status !== "off")} onClick={() => saveSubscriptionStatus("on")}>ON</button>
+                      <button type="button" className={(selectedDay?.status === "off" ? "active off" : "")} disabled={busy || selectedSubscriptionDate < todayKey} onClick={() => saveSubscriptionStatus("off")}>OFF</button>
+                    </div>
+                    {activeMilkItems.length ? (
+                      <div className="subscription-day-items"><strong>Milk on your daily list</strong>{activeMilkItems.map((item) => <span key={item.id}>🥛 {item.product_name} · {item.size} × {item.quantity}</span>)}</div>
+                    ) : <p className="subscription-needs-milk">Add an active milk product in Daily order to schedule delivery.</p>}
+                    {selectedSubscriptionDate < todayKey && <small className="subscription-past-note">Past delivery days can’t be changed.</small>}
+                  </section>
+                </div>
+              </div>
             )}
 
             {tab === "Daily order" && (

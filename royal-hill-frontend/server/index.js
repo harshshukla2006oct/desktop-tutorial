@@ -349,6 +349,89 @@ app.put("/api/account/profile", requireCustomer, async (req, res) => {
   }
 });
 
+
+app.get("/api/account/subscription-days", requireCustomer, async (req, res) => {
+  const month = typeof req.query.month === "string" ? req.query.month : "";
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: "Choose a valid calendar month." });
+  try {
+    const indiaToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    if (month === indiaToday.slice(0, 7)) {
+      const milkRows = await pool.query(
+        "SELECT product_id, size, quantity FROM customer_daily_orders WHERE customer_id = $1 AND is_active = TRUE AND product_id IN (1, 2) ORDER BY created_at, id",
+        [req.customerSession.customerId],
+      );
+      if (milkRows.rowCount) {
+        const calculated = calculateProductItems(milkRows.rows.map((item) => ({ productId: Number(item.product_id), size: item.size, quantity: Number(item.quantity) })));
+        if (!calculated.error) {
+          await pool.query(
+            "INSERT INTO customer_subscription_days (customer_id, delivery_date, status, items, total_rupees) VALUES ($1, $2::date, 'on', $3::jsonb, $4) ON CONFLICT (customer_id, delivery_date) DO NOTHING",
+            [req.customerSession.customerId, indiaToday, JSON.stringify(calculated.items), calculated.total],
+          );
+        }
+      }
+    }
+    const result = await pool.query(
+      "SELECT delivery_date::text AS delivery_date, status, items, total_rupees, updated_at " +
+      "FROM customer_subscription_days WHERE customer_id = $1 AND delivery_date >= $2::date AND delivery_date < ($2::date + INTERVAL '1 month') ORDER BY delivery_date",
+      [req.customerSession.customerId, month + "-01"],
+    );
+    return res.json({ entries: result.rows });
+  } catch (error) {
+    console.error("Subscription calendar could not be loaded:", error.message);
+    return res.status(500).json({ error: "Your subscription calendar could not be loaded." });
+  }
+});
+
+app.put("/api/account/subscription-days/:date", requireCustomer, async (req, res) => {
+  const deliveryDate = req.params.date;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return res.status(400).json({ error: "Choose a valid delivery date." });
+  const parsedDate = new Date(deliveryDate + "T00:00:00Z");
+  if (!Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== deliveryDate) return res.status(400).json({ error: "Choose a valid delivery date." });
+  const indiaToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  if (deliveryDate < indiaToday) return res.status(400).json({ error: "Past delivery days can’t be changed." });
+  const status = req.body?.status;
+  if (status !== "on" && status !== "off") return res.status(400).json({ error: "Choose ON or OFF for this delivery day." });
+  try {
+    const milkRows = await pool.query(
+      "SELECT product_id, product_name, size, quantity FROM customer_daily_orders " +
+      "WHERE customer_id = $1 AND is_active = TRUE AND product_id IN (1, 2) ORDER BY created_at, id",
+      [req.customerSession.customerId],
+    );
+    let snapshot = [];
+    let total = 0;
+    if (status === "on") {
+      if (!milkRows.rowCount) return res.status(400).json({ error: "Add an active milk item in Daily order before scheduling a delivery." });
+      const calculated = calculateProductItems(milkRows.rows.map((item) => ({ productId: Number(item.product_id), size: item.size, quantity: Number(item.quantity) })));
+      if (calculated.error) return res.status(400).json({ error: calculated.error });
+      snapshot = calculated.items;
+      total = calculated.total;
+    } else {
+      const existing = await pool.query(
+        "SELECT items, total_rupees FROM customer_subscription_days WHERE customer_id = $1 AND delivery_date = $2::date",
+        [req.customerSession.customerId, deliveryDate],
+      );
+      if (existing.rowCount) {
+        snapshot = existing.rows[0].items;
+        total = existing.rows[0].total_rupees;
+      } else if (milkRows.rowCount) {
+        const calculated = calculateProductItems(milkRows.rows.map((item) => ({ productId: Number(item.product_id), size: item.size, quantity: Number(item.quantity) })));
+        if (!calculated.error) { snapshot = calculated.items; total = calculated.total; }
+      }
+    }
+    const saved = await pool.query(
+      "INSERT INTO customer_subscription_days (customer_id, delivery_date, status, items, total_rupees) " +
+      "VALUES ($1, $2::date, $3, $4::jsonb, $5) " +
+      "ON CONFLICT (customer_id, delivery_date) DO UPDATE SET status = EXCLUDED.status, items = EXCLUDED.items, total_rupees = EXCLUDED.total_rupees, updated_at = NOW() " +
+      "RETURNING delivery_date::text AS delivery_date, status, items, total_rupees, updated_at",
+      [req.customerSession.customerId, deliveryDate, status, JSON.stringify(snapshot), total],
+    );
+    return res.json({ entry: saved.rows[0] });
+  } catch (error) {
+    console.error("Subscription day could not be saved:", error.message);
+    return res.status(500).json({ error: "Your delivery choice could not be saved." });
+  }
+});
+
 app.get("/api/account/daily-orders", requireCustomer, async (req, res) => {
   try {
     const result = await pool.query(
@@ -602,6 +685,16 @@ async function start() {
   await pool.query(
     "ALTER TABLE customer_orders ADD COLUMN IF NOT EXISTS customer_id BIGINT REFERENCES customer_accounts(id) ON DELETE SET NULL"
   );
+  await pool.query(
+    "CREATE TABLE IF NOT EXISTS customer_subscription_days (" +
+    "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, " +
+    "customer_id BIGINT NOT NULL REFERENCES customer_accounts(id) ON DELETE CASCADE, " +
+    "delivery_date DATE NOT NULL, status VARCHAR(3) NOT NULL CHECK (status IN ('on', 'off')), " +
+    "items JSONB NOT NULL DEFAULT '[]'::jsonb, total_rupees INTEGER NOT NULL DEFAULT 0 CHECK (total_rupees >= 0), " +
+    "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), " +
+    "UNIQUE (customer_id, delivery_date))"
+  );
+  await pool.query("CREATE INDEX IF NOT EXISTS customer_subscription_days_account_idx ON customer_subscription_days (customer_id, delivery_date)");
   await pool.query(
     "CREATE TABLE IF NOT EXISTS customer_daily_orders (" +
     "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, " +

@@ -96,3 +96,38 @@
   .daily-order-add-form button { width: 100%; }
   .account-history-card { padding: 13px; }
 }
+
+.account-subscription-section { display: grid; gap: 18px; }
+.subscription-calendar-layout { display: grid; grid-template-columns: minmax(300px,1.2fr) minmax(260px,.8fr); gap: 18px; align-items: stretch; }
+.subscription-calendar-card,.subscription-day-card { padding: 20px; border: 1px solid #e4ecf3; border-radius: 13px; background: #fff; }
+.subscription-calendar-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.subscription-calendar-heading h3,.subscription-day-card h3 { margin: 0; color: #294966; font: 700 18px Georgia,serif; }
+.subscription-calendar-heading button { width: 34px; height: 34px; border: 1px solid #e1eaf2; border-radius: 9px; background: #f8fbfe; color: #397bb4; font-size: 22px; cursor: pointer; }
+.subscription-calendar-grid { display: grid; grid-template-columns: repeat(7,minmax(0,1fr)); gap: 6px; }
+.subscription-calendar-weekdays { margin-bottom: 7px; }
+.subscription-calendar-weekdays span { padding: 7px 0; color: #91a2b1; font-size: 10px; font-weight: 800; text-align: center; }
+.subscription-calendar-blank { min-height: 49px; }
+.subscription-calendar-day { position: relative; display: grid; justify-items: center; align-content: center; gap: 2px; min-height: 49px; border: 1px solid transparent; border-radius: 9px; background: #f7f9fb; color: #61798d; font: 600 12px inherit; cursor: pointer; }
+.subscription-calendar-day:hover { border-color: #b9d6ee; }
+.subscription-calendar-day.today { box-shadow: inset 0 0 0 1px #8db8dc; }
+.subscription-calendar-day.selected { border-color: #347fb8; background: #edf6ff; color: #245d89; }
+.subscription-calendar-day.on .calendar-mark { color: #2e9b58; }
+.subscription-calendar-day.off .calendar-mark { color: #ce5656; }
+.calendar-mark { font-size: 13px; line-height: 12px; }
+.subscription-calendar-legend { display: flex; gap: 18px; margin-top: 17px; color: #7b8fa2; font-size: 10px; }
+.subscription-calendar-legend b { margin-right: 5px; font-size: 14px; }
+.legend-on { color: #2e9b58; }.legend-off { color: #ce5656; }
+.subscription-day-card { display: flex; flex-direction: column; align-items: flex-start; }
+.subscription-day-card .eyebrow { margin: 0 0 10px; }
+.subscription-day-caption { min-height: 36px; color: #7b8fa2; font-size: 12px; line-height: 1.5; }
+.subscription-toggle { display: flex; width: 100%; gap: 8px; padding: 5px; margin: 5px 0 15px; border-radius: 11px; background: #f2f6f9; }
+.subscription-toggle button { flex: 1; min-height: 42px; border: 0; border-radius: 8px; background: transparent; color: #8192a0; font-size: 12px; font-weight: 800; cursor: pointer; }
+.subscription-toggle button.active.on { background: #e7f6eb; color: #218247; box-shadow: 0 2px 8px #1b483010; }
+.subscription-toggle button.active.off { background: #fff0ef; color: #b84646; box-shadow: 0 2px 8px #481b1b10; }
+.subscription-toggle button:disabled { opacity: .6; cursor: not-allowed; }
+.subscription-day-items { display: grid; gap: 8px; width: 100%; padding-top: 13px; border-top: 1px solid #edf1f4; color: #688196; font-size: 11px; }
+.subscription-day-items strong { color: #36536b; font-size: 11px; }
+.subscription-needs-milk,.subscription-past-note { margin: auto 0 0; color: #a07145; font-size: 11px; line-height: 1.5; }
+.subscription-past-note { padding-top: 14px; color: #8596a4; }
+@media(max-width:850px) { .subscription-calendar-layout { grid-template-columns: 1fr; } .customer-account-nav { grid-template-columns: repeat(5,minmax(0,1fr)); } }
+@media(max-width:600px) { .subscription-calendar-card,.subscription-day-card { padding: 14px; } .subscription-calendar-grid { gap: 4px; } .subscription-calendar-day,.subscription-calendar-blank { min-height: 42px; } .subscription-calendar-legend { gap: 12px; } }

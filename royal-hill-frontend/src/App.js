@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import CustomerAccount from "./CustomerAccount";
 
@@ -85,6 +85,16 @@ function App() {
   const [subscriptionPage, setSubscriptionPage] = useState("closed");
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [showAccount, setShowAccount] = useState(() => window.location.pathname === "/customer" || new URLSearchParams(window.location.search).get("account") === "1");
+  const [accountProfile, setAccountProfile] = useState(null);
+
+  useEffect(() => {
+    let current = true;
+    fetch("/api/account/session", { credentials: "same-origin" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((result) => { if (current) setAccountProfile(result?.profile || null); })
+      .catch(() => { if (current) setAccountProfile(null); });
+    return () => { current = false; };
+  }, []);
 
   const visibleProducts = useMemo(() => products.filter((product) => {
     const matchesCategory = activeCategory === "All products" || product.category === activeCategory;
@@ -367,7 +377,7 @@ function App() {
             <button className="subscription-button" onClick={() => setSubscriptionPage("plans")}>
               <span>✦</span><span className="subscription-button-text">Subscription</span>
             </button>
-            <button className="account-entry-button" onClick={() => setShowAccount(true)}>Login / Account</button>
+            <button className="account-entry-button" aria-label={accountProfile ? "Open your account" : "Sign in or create an account"} onClick={() => setShowAccount(true)}>{accountProfile ? "@" + accountProfile.username : "Login / Account"}</button>
           </div>
         </header>
 
