@@ -286,6 +286,7 @@ app.post("/api/auth/login", async (req, res) => {
       "COALESCE(delivery_address, '') AS address, COALESCE(postal_code, '') AS pin FROM customer_accounts WHERE id = $1",
       [account.id],
     );
+    await pool.query("INSERT INTO customer_login_events (customer_id) VALUES ($1)", [account.id]);
     setCustomerCookie(res, createCustomerSessionToken(Number(account.id), "username", username));
     return res.json({ authenticated: true, profile: saved.rows[0] });
   } catch (error) {
@@ -682,6 +683,48 @@ app.post("/api/admin/logout", (_req, res) => {
   return res.json({ authenticated: false });
 });
 
+app.get("/api/admin/customer-logins", requireAdmin, async (req, res) => {
+  const parsedLimit = Number.parseInt(req.query.limit, 10);
+  const parsedOffset = Number.parseInt(req.query.offset, 10);
+  const limit = Number.isInteger(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 100) : 50;
+  const offset = Number.isInteger(parsedOffset) ? Math.min(Math.max(parsedOffset, 0), 100000) : 0;
+  try {
+    const [customers, recentLogins, counts] = await Promise.all([
+      pool.query(
+        "SELECT c.id, COALESCE(c.username, '') AS username, COALESCE(c.full_name, '') AS name, " +
+        "COUNT(e.id)::int AS login_count, MAX(e.created_at) AS last_login_at " +
+        "FROM customer_accounts c JOIN customer_login_events e ON e.customer_id = c.id " +
+        "GROUP BY c.id ORDER BY MAX(e.created_at) DESC, c.id DESC LIMIT $1 OFFSET $2",
+        [limit, offset],
+      ),
+      pool.query(
+        "SELECT e.id, e.created_at AS logged_in_at, COALESCE(c.username, '') AS username, " +
+        "COALESCE(c.full_name, '') AS name FROM customer_login_events e " +
+        "JOIN customer_accounts c ON c.id = e.customer_id " +
+        "ORDER BY e.created_at DESC, e.id DESC LIMIT 100"
+      ),
+      pool.query(
+        "SELECT (SELECT COUNT(*)::int FROM customer_accounts) AS registered_customers, " +
+        "(SELECT COUNT(DISTINCT customer_id)::int FROM customer_login_events) AS customers_logged_in, " +
+        "(SELECT COUNT(*)::int FROM customer_login_events) AS total_logins"
+      ),
+    ]);
+    const totals = counts.rows[0];
+    return res.json({
+      customers: customers.rows,
+      recentLogins: recentLogins.rows,
+      registeredCustomers: totals.registered_customers,
+      loggedInCustomers: totals.customers_logged_in,
+      totalLogins: totals.total_logins,
+      limit,
+      offset,
+    });
+  } catch (error) {
+    console.error("Customer login activity could not be loaded:", error.message);
+    return res.status(500).json({ error: "Customer login activity could not be loaded." });
+  }
+});
+
 app.get("/api/admin/orders", requireAdmin, async (req, res) => {
   const parsedLimit = Number.parseInt(req.query.limit, 10);
   const parsedOffset = Number.parseInt(req.query.offset, 10);
@@ -735,6 +778,14 @@ async function start() {
   await pool.query("ALTER TABLE customer_accounts ADD COLUMN IF NOT EXISTS username VARCHAR(32)");
   await pool.query("ALTER TABLE customer_accounts ADD COLUMN IF NOT EXISTS password_hash TEXT");
   await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS customer_accounts_username_ci_idx ON customer_accounts (LOWER(username)) WHERE username IS NOT NULL");
+  await pool.query(
+    "CREATE TABLE IF NOT EXISTS customer_login_events (" +
+    "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, " +
+    "customer_id BIGINT NOT NULL REFERENCES customer_accounts(id) ON DELETE CASCADE, " +
+    "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+  );
+  await pool.query("CREATE INDEX IF NOT EXISTS customer_login_events_customer_time_idx ON customer_login_events (customer_id, created_at DESC)");
+  await pool.query("CREATE INDEX IF NOT EXISTS customer_login_events_time_idx ON customer_login_events (created_at DESC)");
   await pool.query("ALTER TABLE customer_accounts ADD COLUMN IF NOT EXISTS email VARCHAR(254) UNIQUE");
   await pool.query(
     "ALTER TABLE customer_orders ADD COLUMN IF NOT EXISTS customer_id BIGINT REFERENCES customer_accounts(id) ON DELETE SET NULL"

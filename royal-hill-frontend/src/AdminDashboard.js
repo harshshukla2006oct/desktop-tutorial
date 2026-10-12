@@ -19,6 +19,13 @@ function AdminDashboard() {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loginCustomers, setLoginCustomers] = useState([]);
+  const [recentLogins, setRecentLogins] = useState([]);
+  const [loginOffset, setLoginOffset] = useState(0);
+  const [loginCustomersTotal, setLoginCustomersTotal] = useState(0);
+  const [registeredCustomers, setRegisteredCustomers] = useState(0);
+  const [customersLoggedIn, setCustomersLoggedIn] = useState(0);
+  const [totalLogins, setTotalLogins] = useState(0);
 
   const loadEntries = useCallback(async (nextOffset = 0) => {
     setLoading(true);
@@ -37,12 +44,35 @@ function AdminDashboard() {
     }
   }, []);
 
+  const loadLoginCustomers = useCallback(async (nextOffset = 0) => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/admin/customer-logins?limit=" + pageSize + "&offset=" + nextOffset);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not load customer login activity.");
+      setLoginCustomers(result.customers || []);
+      setRecentLogins(result.recentLogins || []);
+      setLoginCustomersTotal(result.loggedInCustomers || 0);
+      setRegisteredCustomers(result.registeredCustomers || 0);
+      setCustomersLoggedIn(result.loggedInCustomers || 0);
+      setTotalLogins(result.totalLogins || 0);
+      setLoginOffset(nextOffset);
+    } catch (loadError) {
+      setError(loadError.message || "Could not load customer login activity.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const refreshDashboard = useCallback(() => Promise.all([loadEntries(0), loadLoginCustomers(0)]), [loadEntries, loadLoginCustomers]);
+
   useEffect(() => {
     fetch("/api/admin/session")
       .then((response) => {
         if (response.ok) {
           setAuthState("authenticated");
-          loadEntries(0);
+          refreshDashboard();
         } else {
           setAuthState("signed-out");
         }
@@ -51,7 +81,7 @@ function AdminDashboard() {
         setAuthState("signed-out");
         setError("Dashboard service is unavailable. Please try again.");
       });
-  }, [loadEntries]);
+  }, [refreshDashboard]);
 
   const signIn = async (event) => {
     event.preventDefault();
@@ -67,7 +97,7 @@ function AdminDashboard() {
       if (!response.ok) throw new Error(result.error || "Sign-in failed.");
       setPassword("");
       setAuthState("authenticated");
-      await loadEntries(0);
+      await refreshDashboard();
     } catch (loginError) {
       setError(loginError.message || "Sign-in failed.");
     } finally {
@@ -78,6 +108,8 @@ function AdminDashboard() {
   const signOut = async () => {
     await fetch("/api/admin/logout", { method: "POST" }).catch(() => {});
     setEntries([]);
+    setLoginCustomers([]);
+    setRecentLogins([]);
     setAuthState("signed-out");
   };
 
@@ -131,7 +163,7 @@ function AdminDashboard() {
             <h1>Order dashboard</h1>
             <p className="admin-intro">Newest entries appear first.</p>
           </div>
-          <button className="admin-refresh" type="button" onClick={() => loadEntries(0)} disabled={loading}>
+          <button className="admin-refresh" type="button" onClick={refreshDashboard} disabled={loading}>
             {loading ? "Refreshing…" : "Refresh"}
           </button>
         </div>
@@ -194,6 +226,69 @@ function AdminDashboard() {
             <button type="button" onClick={() => loadEntries(offset + pageSize)} disabled={offset + pageSize >= total || loading}>Older</button>
           </nav>
         )}
+        <section className="admin-login-activity">
+          <div className="admin-activity-heading">
+            <div>
+              <p className="admin-eyebrow">ACCOUNT ACTIVITY</p>
+              <h2>Customer sign-ins</h2>
+              <p className="admin-intro">See customer usernames, profile names, last sign-in times, and sign-in counts.</p>
+            </div>
+            <button className="admin-refresh" type="button" onClick={() => loadLoginCustomers(0)} disabled={loading}>
+              {loading ? "Refreshing…" : "Refresh sign-ins"}
+            </button>
+          </div>
+          <div className="admin-login-stats">
+            <article><strong>{registeredCustomers}</strong><span>Registered accounts</span></article>
+            <article><strong>{customersLoggedIn}</strong><span>Customers who signed in</span></article>
+            <article><strong>{totalLogins}</strong><span>Recorded sign-ins</span></article>
+          </div>
+          {error && loginCustomers.length === 0 && <p className="admin-error admin-page-error" role="alert">{error}</p>}
+          <h3 className="admin-subheading">Customers who have signed in</h3>
+          {loginCustomers.length === 0 && !loading ? (
+            <section className="admin-empty">
+              <span>♙</span>
+              <h2>No sign-ins recorded yet</h2>
+              <p>Successful customer sign-ins will appear here from now on.</p>
+            </section>
+          ) : (
+            <div className="admin-login-table-wrap">
+              <table className="admin-login-table">
+                <thead><tr><th>Username</th><th>Name</th><th>Last sign-in</th><th>Sign-ins</th></tr></thead>
+                <tbody>
+                  {loginCustomers.map((customer) => (
+                    <tr key={customer.id}>
+                      <td><strong>{customer.username || "Username unavailable"}</strong></td>
+                      <td>{customer.name || "Name not added"}</td>
+                      <td>{customer.last_login_at ? formatDate(customer.last_login_at) : "—"}</td>
+                      <td>{customer.login_count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {loginCustomersTotal > pageSize && (
+            <nav className="admin-pagination" aria-label="Customer sign-in pages">
+              <button type="button" onClick={() => loadLoginCustomers(Math.max(0, loginOffset - pageSize))} disabled={loginOffset === 0 || loading}>Newer</button>
+              <span>{loginOffset + 1}–{Math.min(loginOffset + loginCustomers.length, loginCustomersTotal)} of {loginCustomersTotal}</span>
+              <button type="button" onClick={() => loadLoginCustomers(loginOffset + pageSize)} disabled={loginOffset + pageSize >= loginCustomersTotal || loading}>Older</button>
+            </nav>
+          )}
+          <h3 className="admin-subheading">Recent sign-in activity</h3>
+          {recentLogins.length === 0 ? (
+            <p className="admin-activity-empty">No sign-in events yet.</p>
+          ) : (
+            <div className="admin-recent-logins">
+              {recentLogins.map((login) => (
+                <article key={login.id}>
+                  <div><strong>{login.name || login.username || "Customer"}</strong><span>{login.username ? "@" + login.username : "Username unavailable"}</span></div>
+                  <time dateTime={login.logged_in_at}>{formatDate(login.logged_in_at)}</time>
+                </article>
+              ))}
+            </div>
+          )}
+          <p className="admin-privacy-note">Sign-in tracking starts when this update goes live. Earlier sign-ins were not recorded. Passwords and delivery addresses are not shown here.</p>
+        </section>
         <p className="admin-privacy-note">Customer delivery details are shown only in this signed-in dashboard.</p>
       </section>
     </main>
