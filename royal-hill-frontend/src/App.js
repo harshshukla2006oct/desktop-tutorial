@@ -352,14 +352,14 @@ function App() {
         <main className="checkout-layout">
           <section className="checkout-main-card">
             <div className="checkout-steps">
-              <span className={checkoutStep === "details" ? "current" : "done"}>1&nbsp; Delivery details</span>
+              <span className={checkoutAuthRequired || checkoutStep === "payment" ? "done" : checkoutStep === "details" ? "current" : ""}>1&nbsp; Delivery details</span>
               <i />
               <span className={checkoutAuthRequired ? "current" : accountProfile || checkoutStep === "payment" ? "done" : ""}>2&nbsp; Account</span>
               <i />
               <span className={checkoutStep === "payment" ? "current" : ""}>3&nbsp; Payment</span>
             </div>
 
-            {checkoutStep === "details" ? (
+            {checkoutStep === "details" && !checkoutAuthRequired ? (
               <>
                 <p className="eyebrow">ALMOST THERE</p>
                 <h1>Where should we deliver?</h1>
