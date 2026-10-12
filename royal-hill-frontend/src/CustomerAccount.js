@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import "./CustomerAccount.css";
 
 const accountProducts = [
-  { id: 1, name: "Farm Fresh Milk", milk: true },
+  { id: 1, name: "Fresh Buffalo Milk", milk: true },
   { id: 2, name: "Fresh Cow Milk", milk: true },
   { id: 3, name: "Creamy Paneer" },
   { id: 4, name: "Pure Desi Ghee" },

@@ -3,8 +3,8 @@ import "./App.css";
 import CustomerAccount from "./CustomerAccount";
 
 const products = [
-  { id: 1, name: "Farm Fresh Milk", category: "Milk", detail: "Whole milk · 1 litre", price: 68, icon: "🥛", tag: "DAILY FRESH", color: "milk" },
-  { id: 2, name: "Fresh Cow Milk", category: "Cow Milk", detail: "Cow milk · 1 litre", price: 75, icon: "🥛", tag: "FRESH COW MILK", color: "milk" },
+  { id: 1, name: "Fresh Buffalo Milk", category: "Milk", detail: "Buffalo milk · 1 litre", price: 68, icon: "🥛", tag: "DAILY FRESH", color: "milk" },
+  { id: 2, name: "Fresh Cow Milk", category: "Milk", detail: "Cow milk · 1 litre", price: 75, icon: "🥛", tag: "FRESH COW MILK", color: "milk" },
   { id: 3, name: "Creamy Paneer", category: "Paneer", detail: "Soft & fresh · 200 g", price: 110, icon: "🧀", tag: "MADE TODAY", color: "paneer" },
   { id: 4, name: "Pure Desi Ghee", category: "Ghee", detail: "Traditional bilona · 500 ml", price: 420, icon: "🫙", tag: "PURE & GOLDEN", color: "ghee" },
   { id: 5, name: "Kesar Peda", category: "Sweets", detail: "A little festive · 250 g", price: 180, icon: "🍬", tag: "FRESH SWEETS", color: "sweets" },
@@ -17,7 +17,6 @@ const products = [
 const categories = [
   { name: "All products", icon: "✦" },
   { name: "Milk", icon: "🥛" },
-  { name: "Cow Milk", icon: "🐄" },
   { name: "Paneer", icon: "🧀" },
   { name: "Ghee", icon: "🫙" },
   { name: "Sweets", icon: "🍬" },

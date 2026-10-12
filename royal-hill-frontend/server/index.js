@@ -12,7 +12,7 @@ const sessionLifetimeSeconds = 8 * 60 * 60;
 const rateBuckets = new Map();
 
 const products = {
-  1: { name: "Farm Fresh Milk", basePrice: 68, baseAmount: 1000, milk: true },
+  1: { name: "Fresh Buffalo Milk", basePrice: 68, baseAmount: 1000, milk: true },
   2: { name: "Fresh Cow Milk", basePrice: 75, baseAmount: 1000, milk: true },
   3: { name: "Creamy Paneer", basePrice: 110, baseAmount: 200 },
   4: { name: "Pure Desi Ghee", basePrice: 420, baseAmount: 500 },
