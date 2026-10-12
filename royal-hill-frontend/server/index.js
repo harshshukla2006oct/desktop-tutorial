@@ -138,6 +138,24 @@ function requireCustomer(req, res, next) {
   return next();
 }
 
+
+async function requireActiveCustomerSubscription(req, res, next) {
+  try {
+    const result = await pool.query(
+      "SELECT id, created_at, created_at + INTERVAL '30 days' AS ends_at FROM customer_orders " +
+      "WHERE customer_id = $1 AND order_type = 'subscription' AND created_at > NOW() - INTERVAL '30 days' " +
+      "ORDER BY created_at DESC, id DESC LIMIT 1",
+      [req.customerSession.customerId],
+    );
+    if (!result.rowCount) return res.status(403).json({ error: "Your 30-day subscription has expired. Choose a plan to continue." });
+    req.activeCustomerSubscription = result.rows[0];
+    return next();
+  } catch (error) {
+    console.error("Customer subscription access could not be checked:", error.message);
+    return res.status(500).json({ error: "Your subscription could not be checked." });
+  }
+}
+
 function setCustomerCookie(res, token) {
   res.cookie(customerSessionCookie, token, {
     httpOnly: true,
@@ -376,7 +394,7 @@ app.get("/api/account/subscription", requireCustomer, async (req, res) => {
   }
 });
 
-app.get("/api/account/subscription-days", requireCustomer, async (req, res) => {
+app.get("/api/account/subscription-days", requireCustomer, requireActiveCustomerSubscription, async (req, res) => {
   const month = typeof req.query.month === "string" ? req.query.month : "";
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: "Choose a valid calendar month." });
   try {
@@ -408,7 +426,7 @@ app.get("/api/account/subscription-days", requireCustomer, async (req, res) => {
   }
 });
 
-app.put("/api/account/subscription-days/:date", requireCustomer, async (req, res) => {
+app.put("/api/account/subscription-days/:date", requireCustomer, requireActiveCustomerSubscription, async (req, res) => {
   const deliveryDate = req.params.date;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(deliveryDate)) return res.status(400).json({ error: "Choose a valid delivery date." });
   const parsedDate = new Date(deliveryDate + "T00:00:00Z");

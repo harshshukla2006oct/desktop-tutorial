@@ -75,6 +75,25 @@ function CustomerAccount({ onBack }) {
     return () => { current = false; };
   }, []);
 
+
+  useEffect(() => {
+    if (!subscriptionStatus?.active || !subscriptionStatus.endsAt) return undefined;
+    const expiresAt = new Date(subscriptionStatus.endsAt).getTime();
+    if (!Number.isFinite(expiresAt)) return undefined;
+    let timerId;
+    const checkExpiry = () => {
+      const remaining = expiresAt - Date.now();
+      if (remaining <= 0) {
+        setSubscriptionStatus((current) => current?.endsAt === subscriptionStatus.endsAt ? { ...current, active: false } : current);
+        setSubscriptionDays([]);
+        return;
+      }
+      timerId = window.setTimeout(checkExpiry, Math.min(remaining, 2147483647));
+    };
+    checkExpiry();
+    return () => window.clearTimeout(timerId);
+  }, [subscriptionStatus?.active, subscriptionStatus?.endsAt]);
+
   useEffect(() => {
     if (!authenticated || !subscriptionStatus?.active) return undefined;
     let current = true;
@@ -310,7 +329,7 @@ function CustomerAccount({ onBack }) {
 
             {tab === "Your subscription" && subscriptionStatus?.active && (
               <div className="account-subscription-section">
-                <div className="account-section-heading"><div><h2>{subscriptionStatus.planName || "Your active plan"}</h2><p>Choose which days you want milk delivered.</p></div></div>
+                <div className="account-section-heading"><div><h2>{subscriptionStatus.planName || "Your active plan"}</h2><p>30-day subscription · Access expires {new Date(subscriptionStatus.endsAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}. Choose which days you want milk delivered.</p></div></div>
 
                 <div className="account-section-heading"><div><h2>Choose your milk delivery days</h2><p>Each new day starts ON. Turn a day OFF to cancel that delivery.</p></div></div>
                 <div className="subscription-calendar-layout">
