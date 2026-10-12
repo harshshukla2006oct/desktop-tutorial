@@ -142,3 +142,72 @@
 .account-plan-card .checkout-primary { display: flex; justify-content: space-between; align-items: center; width: 100%; margin-top: 5px; }
 .account-plan-note { max-width: 820px; margin: 0; color: #8293a1; font-size: 11px; line-height: 1.5; }
 @media(max-width:600px) { .account-plan-grid { grid-template-columns: 1fr; } }
+
+
+/* Match the customer dashboard to the dairy storefront */
+.customer-account-page {
+  background:
+    radial-gradient(circle at 90% 12%,rgba(255,255,255,.9),transparent 32%),
+    radial-gradient(circle at 12% 80%,rgba(205,231,251,.38),transparent 28%),
+    linear-gradient(135deg,#f1f8ff,#f8fbff);
+}
+.customer-account-header { border-bottom-color: #d5e7f6; }
+.customer-account-header .logo { color: #123e6c; }
+.customer-account-header .logo b { color: #2476bd; }
+.customer-account-header .logo-mark { width: 42px; height: 42px; }
+.customer-account-layout { animation: dairy-rise .55s cubic-bezier(.2,.75,.25,1) both; }
+.customer-account-nav {
+  background: linear-gradient(160deg,#0b396f,#145a9f);
+  border-color: rgba(255,255,255,.24);
+  box-shadow: 0 16px 38px rgba(15,65,112,.14);
+}
+.account-nav-title { color: #a8cceb; }
+.customer-account-nav button { color: #d9eafa; transition: transform .22s ease,background .22s ease,color .22s ease; }
+.customer-account-nav button:hover { transform: translateX(3px); color: #fff; background: rgba(255,255,255,.1); }
+.customer-account-nav button.active { background: #fff; color: #135995; box-shadow: 0 5px 16px rgba(0,0,0,.12); }
+.customer-account-nav .account-logout-button { border-color: rgba(255,255,255,.18); color: #ffdddd; }
+.customer-account-content,.account-login-card {
+  border-color: rgba(191,217,239,.85);
+  border-radius: 20px;
+  box-shadow: 0 18px 45px rgba(20,72,119,.08);
+  animation: dairy-rise .48s cubic-bezier(.2,.75,.25,1) both;
+}
+.account-login-card { overflow: hidden; position: relative; }
+.account-login-card::before {
+  content: "";
+  display: block;
+  height: 6px;
+  position: absolute;
+  inset: 0 0 auto;
+  background: linear-gradient(90deg,#0b3b72,#2b83ca,#c8e8ff);
+}
+.customer-account-content h1,.account-login-card h1 { color: #103e70; }
+.account-verified-badge { background: #e9f5ff; color: #1767b7; }
+.account-profile-card,.account-daily-section,.account-history-section,.account-subscription-section {
+  animation: dairy-rise .4s cubic-bezier(.2,.75,.25,1) both;
+}
+.customer-account-nav button:active,.daily-order-actions button:active,.subscription-calendar-heading button:active,.subscription-calendar-day:active,.subscription-toggle button:active {
+  transform: scale(.96);
+}
+.daily-order-row,.account-history-card,.subscription-calendar-card,.subscription-day-card,.account-plan-card {
+  border-color: #dceaf6;
+  box-shadow: 0 8px 22px rgba(23,75,126,.045);
+  transition: transform .24s ease,box-shadow .24s ease,border-color .24s ease;
+}
+.daily-order-row:hover,.account-history-card:hover,.account-plan-card:hover {
+  transform: translateY(-2px);
+  border-color: #a9d0f2;
+  box-shadow: 0 14px 26px rgba(23,75,126,.09);
+}
+.subscription-calendar-day { transition: transform .18s ease,background .18s ease,border-color .18s ease; }
+.subscription-calendar-day:hover { transform: translateY(-2px); }
+.checkout-back,.account-load-more,.daily-order-actions button,.subscription-calendar-heading button {
+  transition: transform .2s ease,box-shadow .2s ease,background .2s ease;
+}
+.checkout-back:hover,.account-load-more:hover,.subscription-calendar-heading button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 7px 16px rgba(27,82,136,.1);
+}
+@media(max-width:850px) {
+  .customer-account-nav { background: linear-gradient(165deg,#0b356a,#12539a); }
+}

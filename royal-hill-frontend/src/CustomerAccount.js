@@ -247,7 +247,7 @@ function CustomerAccount({ onBack }) {
     <main className="customer-account-page">
       <header className="customer-account-header">
         <a className="logo" href="#home" onClick={(event) => { event.preventDefault(); onBack(); }}>
-          <span className="logo-mark">✿</span><span>Royal Hill <b>Dairy</b></span>
+          <img className="logo-mark" src="/royal-hill-mark.svg" alt="" /><span>Royal Hill <b>Dairy</b></span>
         </a>
         <button className="checkout-back" onClick={onBack}>← Back to shop</button>
       </header>

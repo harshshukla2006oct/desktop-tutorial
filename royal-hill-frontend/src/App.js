@@ -206,7 +206,7 @@ function App() {
       <div className="subscription-page">
         <header className="subscription-header">
           <a className="logo" href="#home" onClick={(event) => { event.preventDefault(); setSubscriptionPage("closed"); }}>
-            <span className="logo-mark">✿</span><span>Royal Hill <b>Dairy</b></span>
+            <img className="logo-mark" src="/royal-hill-mark.svg" alt="" /><span>Royal Hill <b>Dairy</b></span>
           </a>
           <button className="checkout-back" onClick={() => setSubscriptionPage(subscriptionPage === "payment" ? "details" : subscriptionPage === "details" ? "plans" : "closed")}>
             ← {subscriptionPage === "payment" ? "Back to details" : subscriptionPage === "details" ? "Back to plans" : "Back to shop"}
@@ -288,7 +288,7 @@ function App() {
       <div className="checkout-page">
         <header className="checkout-topbar">
           <a className="logo" href="#home" onClick={(event) => { event.preventDefault(); setCheckoutStep("shop"); }}>
-            <span className="logo-mark">✿</span><span>Royal Hill <b>Dairy</b></span>
+            <img className="logo-mark" src="/royal-hill-mark.svg" alt="" /><span>Royal Hill <b>Dairy</b></span>
           </a>
           <button className="checkout-back" onClick={() => setCheckoutStep(checkoutStep === "payment" ? "details" : "shop")}>
             ← {checkoutStep === "payment" ? "Back to details" : "Back to shop"}
@@ -365,7 +365,7 @@ function App() {
     <div className="app">
       <aside className="sidebar">
         <a className="logo" href="#home" aria-label="Royal Hill Dairy home">
-          <span className="logo-mark">✿</span><span>Royal Hill <b>Dairy</b></span>
+          <img className="logo-mark" src="/royal-hill-mark.svg" alt="" /><span>Royal Hill <b>Dairy</b></span>
         </a>
         <div className="sidebar-label">SHOP BY CATEGORY</div>
         <nav className="category-nav" aria-label="Product categories">
@@ -414,7 +414,7 @@ function App() {
             <span className="product-count">{visibleProducts.length} {visibleProducts.length === 1 ? "product" : "products"}</span>
           </div>
           {visibleProducts.length ? (
-            <div className="product-grid">
+            <div className="product-grid" key={activeCategory}>
               {visibleProducts.map((product) => (
                 <article className="product-card" key={product.id}>
                   <div className={`product-cover ${product.color}`}>
