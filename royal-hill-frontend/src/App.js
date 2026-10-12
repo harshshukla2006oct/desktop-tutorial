@@ -389,7 +389,7 @@ function App() {
           </div>
           <div className="topbar-actions">
             <button className="basket-button" onClick={() => setShowBasket(true)}>
-              <span className="basket-icon">♧</span><span className="basket-text">Basket</span>{cartCount > 0 && <span className="basket-count">{cartCount}</span>}
+              <svg className="basket-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d="M3.5 9h17l-1.4 9.5H5L3.5 9Z"/><path d="m8 9 3-5M16 9l-3-5M7.2 13.2v2.1M12 13.2v2.1M16.8 13.2v2.1"/></svg><span className="basket-text">Basket</span>{cartCount > 0 && <span className="basket-count">{cartCount}</span>}
             </button>
             <button className="subscription-button" onClick={() => setSubscriptionPage("plans")}>
               <span>✦</span><span className="subscription-button-text">Subscription</span>

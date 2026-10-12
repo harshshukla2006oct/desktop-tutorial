@@ -32,7 +32,7 @@ button { cursor: pointer; }
 .search-box input::placeholder { color: #9caebe; }
 .clear-search { background: transparent; border: 0; color: #8497aa; font-size: 23px; }
 .basket-button { height: 44px; display: flex; align-items: center; gap: 9px; border: 1px solid #d9e9fa; border-radius: 12px; background: #fff; color: var(--blue); font-size: 13px; font-weight: 700; padding: 0 15px; }
-.basket-icon { font-size: 21px; transform: rotate(180deg); }
+.basket-icon { width: 20px; height: 20px; flex: 0 0 20px; display: block; }
 .basket-count { display: grid; place-items: center; border-radius: 20px; width: 20px; height: 20px; color: #fff; background: var(--blue); font-size: 11px; }
 .hero { min-height: 337px; border-radius: 21px; overflow: hidden; position: relative; display: flex; align-items: center; padding: 47px 54px; background: linear-gradient(110deg,#e9f4ff 0%,#d5eaff 53%,#b6d6f5 100%); }
 .hero-photo-placeholder { position: absolute; right: 0; top: 0; bottom: 0; width: 48%; overflow: hidden; background: linear-gradient(180deg,#c3ddf4,#8fb9df); display: flex; align-items: flex-end; justify-content: center; }
