@@ -2,6 +2,28 @@ import React, { useCallback, useEffect, useState } from "react";
 import "./AdminDashboard.css";
 
 const pageSize = 50;
+const adminProducts = [
+  { id: 1, name: "Fresh Buffalo Milk", milk: true },
+  { id: 2, name: "Fresh Cow Milk", milk: true },
+  { id: 3, name: "Creamy Paneer" },
+  { id: 4, name: "Pure Desi Ghee" },
+  { id: 5, name: "Kesar Peda" },
+  { id: 6, name: "Thick Curd" },
+  { id: 7, name: "Malai Paneer" },
+  { id: 8, name: "A2 Cow Ghee" },
+  { id: 9, name: "Milk Cake" },
+];
+const adminPlans = [
+  { id: "daily-milk", name: "Daily Cow Milk" },
+  { id: "fresh-plus", name: "Fresh Plus" },
+];
+const paymentMethods = ["upi", "card", "emi", "netbanking", "cod"];
+const sizesForProduct = (productId) => [1, 2].includes(Number(productId)) ? ["500 ml", "1 L", "2 L"] : ["250 gm", "500 gm", "1 kg"];
+const emptyOrderDraft = () => ({
+  customerName: "", phone: "", address: "", pin: "",
+  orderType: "product", paymentMethod: "cod", consent: false,
+  planId: "daily-milk", items: [{ productId: "1", size: "1 L", quantity: 1 }],
+});
 
 function formatDate(value) {
   return new Intl.DateTimeFormat("en-IN", {
@@ -26,6 +48,15 @@ function AdminDashboard() {
   const [registeredCustomers, setRegisteredCustomers] = useState(0);
   const [customersLoggedIn, setCustomersLoggedIn] = useState(0);
   const [totalLogins, setTotalLogins] = useState(0);
+  const [activeSection, setActiveSection] = useState("orders");
+  const [dataLogs, setDataLogs] = useState([]);
+  const [dataLogsTotal, setDataLogsTotal] = useState(0);
+  const [dataLogsOffset, setDataLogsOffset] = useState(0);
+  const [orderFormOpen, setOrderFormOpen] = useState(false);
+  const [editingOrderId, setEditingOrderId] = useState(null);
+  const [orderDraft, setOrderDraft] = useState(emptyOrderDraft);
+  const [orderSaving, setOrderSaving] = useState(false);
+  const [orderError, setOrderError] = useState("");
 
   const loadEntries = useCallback(async (nextOffset = 0) => {
     setLoading(true);
@@ -65,7 +96,27 @@ function AdminDashboard() {
     }
   }, []);
 
-  const refreshDashboard = useCallback(() => Promise.all([loadEntries(0), loadLoginCustomers(0)]), [loadEntries, loadLoginCustomers]);
+  const loadDataLogs = useCallback(async (nextOffset = 0) => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/admin/data-logs?limit=" + pageSize + "&offset=" + nextOffset);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not load data logs.");
+      setDataLogs(result.entries || []);
+      setDataLogsTotal(result.total || 0);
+      setDataLogsOffset(nextOffset);
+    } catch (loadError) {
+      setError(loadError.message || "Could not load data logs.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const refreshDashboard = useCallback(
+    () => Promise.all([loadEntries(0), loadLoginCustomers(0), loadDataLogs(0)]),
+    [loadEntries, loadLoginCustomers, loadDataLogs],
+  );
 
   useEffect(() => {
     fetch("/api/admin/session")
@@ -113,6 +164,105 @@ function AdminDashboard() {
     setAuthState("signed-out");
   };
 
+  const startCreateOrder = () => {
+    setEditingOrderId(null);
+    setOrderDraft(emptyOrderDraft());
+    setOrderError("");
+    setOrderFormOpen(true);
+  };
+
+  const startEditOrder = (entry) => {
+    setEditingOrderId(entry.id);
+    const isSubscription = entry.order_type === "subscription";
+    const firstItem = entry.items?.[0];
+    const plan = adminPlans.find((candidate) => candidate.name === firstItem?.name);
+    const items = (entry.items || []).map((item) => {
+      const product = adminProducts.find((candidate) => candidate.name === item.name);
+      const productId = product?.id || 1;
+      const sizes = sizesForProduct(productId);
+      return {
+        productId: String(productId),
+        size: sizes.includes(item.size) ? item.size : sizes[0],
+        quantity: Number(item.quantity) || 1,
+      };
+    });
+    setOrderDraft({
+      customerName: entry.customer_name || "",
+      phone: entry.phone?.trim() || "",
+      address: entry.delivery_address || "",
+      pin: entry.postal_code?.trim() || "",
+      orderType: isSubscription ? "subscription" : "product",
+      paymentMethod: entry.payment_method || "cod",
+      consent: false,
+      planId: plan?.id || "daily-milk",
+      items: items.length ? items : [{ productId: "1", size: "1 L", quantity: 1 }],
+    });
+    setOrderError("");
+    setOrderFormOpen(true);
+  };
+
+  const saveOrder = async (event) => {
+    event.preventDefault();
+    setOrderSaving(true);
+    setOrderError("");
+    const payload = {
+      customer: { name: orderDraft.customerName, phone: orderDraft.phone, address: orderDraft.address, pin: orderDraft.pin },
+      consent: orderDraft.consent,
+      orderType: orderDraft.orderType,
+      paymentMethod: orderDraft.paymentMethod,
+      ...(orderDraft.orderType === "subscription"
+        ? { planId: orderDraft.planId }
+        : { items: orderDraft.items.map((item) => ({ productId: Number(item.productId), size: item.size, quantity: Number(item.quantity) })) }),
+    };
+    try {
+      const response = await fetch(
+        editingOrderId ? "/api/admin/orders/" + editingOrderId : "/api/admin/orders",
+        { method: editingOrderId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) },
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "The order could not be saved.");
+      setOrderFormOpen(false);
+      setOrderError("");
+      await Promise.all([loadEntries(editingOrderId ? offset : 0), loadDataLogs(0)]);
+    } catch (saveError) {
+      setOrderError(saveError.message || "The order could not be saved.");
+    } finally {
+      setOrderSaving(false);
+    }
+  };
+
+  const deleteOrder = async (orderId) => {
+    const confirmed = window.confirm("Delete this order from the admin list? It will remain in the customer’s order history and can be restored.");
+    if (!confirmed) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/admin/orders/" + orderId, { method: "DELETE" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "The order could not be deleted.");
+      await Promise.all([loadEntries(offset), loadDataLogs(0)]);
+    } catch (deleteError) {
+      setError(deleteError.message || "The order could not be deleted.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const restoreOrder = async (orderId) => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/admin/orders/" + orderId + "/restore", { method: "POST" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "The order could not be restored.");
+      await Promise.all([loadEntries(offset), loadDataLogs(0)]);
+    } catch (restoreError) {
+      setError(restoreError.message || "The order could not be restored.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (authState === "checking") {
     return <main className="admin-shell"><p className="admin-loading">Opening the Royal Hill order dashboard…</p></main>;
   }
@@ -157,139 +307,279 @@ function AdminDashboard() {
       </header>
 
       <section className="admin-content">
+        <nav className="admin-section-tabs" aria-label="Admin dashboard sections">
+          <button type="button" className={activeSection === "orders" ? "active" : ""} onClick={() => setActiveSection("orders")}>Orders</button>
+          <button type="button" className={activeSection === "signins" ? "active" : ""} onClick={() => setActiveSection("signins")}>Customer Sign-ins</button>
+          <button type="button" className={activeSection === "logs" ? "active" : ""} onClick={() => setActiveSection("logs")}>Data Logs</button>
+        </nav>
+
         <div className="admin-heading-row">
           <div>
-            <p className="admin-eyebrow">CUSTOMER REQUESTS</p>
-            <h1>Order dashboard</h1>
-            <p className="admin-intro">Newest entries appear first.</p>
+            <p className="admin-eyebrow">{activeSection === "orders" ? "CUSTOMER REQUESTS" : activeSection === "signins" ? "ACCOUNT ACTIVITY" : "ADMIN ACTIVITY"}</p>
+            <h1>{activeSection === "orders" ? "Order dashboard" : activeSection === "signins" ? "Customer Sign-ins" : "Data Logs"}</h1>
+            <p className="admin-intro">
+              {activeSection === "orders"
+                ? "Create, edit, archive, and restore customer orders."
+                : activeSection === "signins"
+                  ? "See account names and successful sign-ins recorded from this update onward."
+                  : "Review order records created, edited, deleted, or restored by an admin."}
+            </p>
           </div>
-          <button className="admin-refresh" type="button" onClick={refreshDashboard} disabled={loading}>
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
+          <div className="admin-heading-actions">
+            {activeSection === "orders" && <button className="admin-primary admin-create-order" type="button" onClick={startCreateOrder}>＋ Create order</button>}
+            <button className="admin-refresh" type="button" onClick={() => {
+              if (activeSection === "orders") loadEntries(0);
+              else if (activeSection === "signins") loadLoginCustomers(0);
+              else loadDataLogs(0);
+            }} disabled={loading}>
+              {loading ? "Refreshing…" : "Refresh"}
+            </button>
+          </div>
         </div>
 
         {error && <p className="admin-error admin-page-error" role="alert">{error}</p>}
-        <div className="admin-count">{total} {total === 1 ? "request" : "requests"}</div>
 
-        {entries.length === 0 && !loading ? (
-          <section className="admin-empty">
-            <span>✿</span>
-            <h2>No requests yet</h2>
-            <p>New orders and subscriptions will appear here when customers submit them.</p>
+        {activeSection === "orders" && (
+          <>
+            <div className="admin-count">{total} {total === 1 ? "order" : "orders"} including archived orders</div>
+            {entries.length === 0 && !loading ? (
+              <section className="admin-empty">
+                <span>✿</span>
+                <h2>No orders yet</h2>
+                <p>Customer requests will appear here when they submit them.</p>
+              </section>
+            ) : (
+              <div className="admin-entry-list">
+                {entries.map((entry) => (
+                  <article className={"admin-entry " + (entry.deleted_at ? "is-deleted" : "")} key={entry.id}>
+                    <div className="admin-entry-heading">
+                      <div>
+                        <span className="admin-order-id">Order #{entry.id}</span>
+                        <span className={"admin-type " + (entry.order_type === "subscription" ? "subscription" : "")}>
+                          {entry.order_type === "subscription" ? "Subscription" : "Shop order"}
+                        </span>
+                        {entry.deleted_at && <span className="admin-deleted-badge">Deleted</span>}
+                      </div>
+                      <time dateTime={entry.created_at}>{formatDate(entry.created_at)}</time>
+                    </div>
+                    <div className="admin-entry-grid">
+                      <section>
+                        <h2>Customer</h2>
+                        <p className="admin-customer-name">{entry.customer_name}</p>
+                        <p><a href={"tel:" + entry.phone.trim()}>{entry.phone.trim()}</a></p>
+                      </section>
+                      <section>
+                        <h2>Delivery address</h2>
+                        <p>{entry.delivery_address}</p>
+                        <p>PIN {entry.postal_code.trim()}</p>
+                      </section>
+                      <section>
+                        <h2>Order details</h2>
+                        <ul className="admin-items">
+                          {entry.items.map((item, index) => (
+                            <li key={index}>{item.name} · {item.size} · Qty {item.quantity} · ₹{item.lineTotal}</li>
+                          ))}
+                        </ul>
+                        <p className="admin-payment-line">Preference: {entry.payment_method.toUpperCase()}</p>
+                        <strong className="admin-total">₹{entry.total_rupees}</strong>
+                      </section>
+                    </div>
+                    <div className="admin-order-actions">
+                      {!entry.deleted_at && <button type="button" onClick={() => startEditOrder(entry)}>Edit order</button>}
+                      {entry.deleted_at
+                        ? <button type="button" className="restore" disabled={loading} onClick={() => restoreOrder(entry.id)}>Restore order</button>
+                        : <button type="button" className="delete" disabled={loading} onClick={() => deleteOrder(entry.id)}>Delete order</button>}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+            {total > pageSize && (
+              <nav className="admin-pagination" aria-label="Order pages">
+                <button type="button" onClick={() => loadEntries(Math.max(0, offset - pageSize))} disabled={offset === 0 || loading}>Newer</button>
+                <span>{offset + 1}–{Math.min(offset + entries.length, total)} of {total}</span>
+                <button type="button" onClick={() => loadEntries(offset + pageSize)} disabled={offset + pageSize >= total || loading}>Older</button>
+              </nav>
+            )}
+            <p className="admin-privacy-note">Delete keeps the order in the customer’s history and can be reversed with Restore.</p>
+          </>
+        )}
+
+        {activeSection === "signins" && (
+          <section className="admin-login-activity">
+            <div className="admin-login-stats">
+              <article><strong>{registeredCustomers}</strong><span>Registered accounts</span></article>
+              <article><strong>{customersLoggedIn}</strong><span>Customers who signed in</span></article>
+              <article><strong>{totalLogins}</strong><span>Recorded sign-ins</span></article>
+            </div>
+            <h2 className="admin-subheading">Customers who have signed in</h2>
+            {loginCustomers.length === 0 && !loading ? (
+              <section className="admin-empty">
+                <span>♙</span>
+                <h2>No sign-ins recorded yet</h2>
+                <p>Successful customer sign-ins will appear here from now on.</p>
+              </section>
+            ) : (
+              <div className="admin-login-table-wrap">
+                <table className="admin-login-table">
+                  <thead><tr><th>Username</th><th>Name</th><th>Last sign-in</th><th>Sign-ins</th></tr></thead>
+                  <tbody>
+                    {loginCustomers.map((customer) => (
+                      <tr key={customer.id}>
+                        <td><strong>{customer.username || "Username unavailable"}</strong></td>
+                        <td>{customer.name || "Name not added"}</td>
+                        <td>{customer.last_login_at ? formatDate(customer.last_login_at) : "—"}</td>
+                        <td>{customer.login_count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {loginCustomersTotal > pageSize && (
+              <nav className="admin-pagination" aria-label="Customer sign-in pages">
+                <button type="button" onClick={() => loadLoginCustomers(Math.max(0, loginOffset - pageSize))} disabled={loginOffset === 0 || loading}>Newer</button>
+                <span>{loginOffset + 1}–{Math.min(loginOffset + loginCustomers.length, loginCustomersTotal)} of {loginCustomersTotal}</span>
+                <button type="button" onClick={() => loadLoginCustomers(loginOffset + pageSize)} disabled={loginOffset + pageSize >= loginCustomersTotal || loading}>Older</button>
+              </nav>
+            )}
+            <h2 className="admin-subheading">Recent sign-in activity</h2>
+            {recentLogins.length === 0 ? (
+              <p className="admin-activity-empty">No sign-in events yet.</p>
+            ) : (
+              <div className="admin-recent-logins">
+                {recentLogins.map((login) => (
+                  <article key={login.id}>
+                    <div><strong>{login.name || login.username || "Customer"}</strong><span>{login.username ? "@" + login.username : "Username unavailable"}</span></div>
+                    <time dateTime={login.logged_in_at}>{formatDate(login.logged_in_at)}</time>
+                  </article>
+                ))}
+              </div>
+            )}
+            <p className="admin-privacy-note">Sign-in tracking starts with this update. Earlier sign-ins were not recorded. Passwords and delivery addresses are not shown.</p>
           </section>
-        ) : (
-          <div className="admin-entry-list">
-            {entries.map((entry) => (
-              <article className="admin-entry" key={entry.id}>
-                <div className="admin-entry-heading">
-                  <div>
-                    <span className="admin-order-id">Request #{entry.id}</span>
-                    <span className={"admin-type " + (entry.order_type === "subscription" ? "subscription" : "")}>
-                      {entry.order_type === "subscription" ? "Subscription" : "Shop order"}
-                    </span>
-                  </div>
-                  <time dateTime={entry.created_at}>{formatDate(entry.created_at)}</time>
-                </div>
-                <div className="admin-entry-grid">
-                  <section>
-                    <h2>Customer</h2>
-                    <p className="admin-customer-name">{entry.customer_name}</p>
-                    <p><a href={"tel:" + entry.phone.trim()}>{entry.phone.trim()}</a></p>
-                  </section>
-                  <section>
-                    <h2>Delivery address</h2>
-                    <p>{entry.delivery_address}</p>
-                    <p>PIN {entry.postal_code.trim()}</p>
-                  </section>
-                  <section>
-                    <h2>Request details</h2>
-                    <ul className="admin-items">
-                      {entry.items.map((item, index) => (
-                        <li key={index}>
-                          {item.name} · {item.size} · Qty {item.quantity} · ₹{item.lineTotal}
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="admin-payment-line">Preference: {entry.payment_method.toUpperCase()}</p>
-                    <strong className="admin-total">₹{entry.total_rupees}</strong>
-                  </section>
-                </div>
-              </article>
-            ))}
-          </div>
         )}
 
-        {total > pageSize && (
-          <nav className="admin-pagination" aria-label="Customer request pages">
-            <button type="button" onClick={() => loadEntries(Math.max(0, offset - pageSize))} disabled={offset === 0 || loading}>Newer</button>
-            <span>{offset + 1}–{Math.min(offset + entries.length, total)} of {total}</span>
-            <button type="button" onClick={() => loadEntries(offset + pageSize)} disabled={offset + pageSize >= total || loading}>Older</button>
-          </nav>
+        {activeSection === "logs" && (
+          <section className="admin-data-logs">
+            <div className="admin-count">{dataLogsTotal} {dataLogsTotal === 1 ? "record" : "records"}</div>
+            {dataLogs.length === 0 && !loading ? (
+              <section className="admin-empty">
+                <span>⌁</span>
+                <h2>No data logs yet</h2>
+                <p>Order changes made by an admin will be recorded here.</p>
+              </section>
+            ) : (
+              <div className="admin-log-list">
+                {dataLogs.map((log) => (
+                  <article className="admin-log-entry" key={log.id}>
+                    <div className="admin-log-heading">
+                      <span className={"admin-log-action " + log.action}>{log.action}</span>
+                      <strong>Order #{log.entity_id}</strong>
+                      <time dateTime={log.created_at}>{formatDate(log.created_at)}</time>
+                    </div>
+                    <p>
+                      {log.action === "updated"
+                        ? "Changed: " + ((log.details?.changedFields || []).join(", ") || "No field changes") + " · Total ₹" + log.details?.previousTotal + " → ₹" + log.details?.newTotal
+                        : log.action === "created"
+                          ? (log.details?.orderType === "subscription" ? "Subscription order" : "Shop order") + " created · Total ₹" + log.details?.total
+                          : log.action === "deleted"
+                            ? "Order moved to deleted status; customer history is retained."
+                            : "Order restored to the active order list."}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            )}
+            {dataLogsTotal > pageSize && (
+              <nav className="admin-pagination" aria-label="Data log pages">
+                <button type="button" onClick={() => loadDataLogs(Math.max(0, dataLogsOffset - pageSize))} disabled={dataLogsOffset === 0 || loading}>Newer</button>
+                <span>{dataLogsOffset + 1}–{Math.min(dataLogsOffset + dataLogs.length, dataLogsTotal)} of {dataLogsTotal}</span>
+                <button type="button" onClick={() => loadDataLogs(dataLogsOffset + pageSize)} disabled={dataLogsOffset + pageSize >= dataLogsTotal || loading}>Older</button>
+              </nav>
+            )}
+          </section>
         )}
-        <section className="admin-login-activity">
-          <div className="admin-activity-heading">
-            <div>
-              <p className="admin-eyebrow">ACCOUNT ACTIVITY</p>
-              <h2>Customer sign-ins</h2>
-              <p className="admin-intro">See customer usernames, profile names, last sign-in times, and sign-in counts.</p>
-            </div>
-            <button className="admin-refresh" type="button" onClick={() => loadLoginCustomers(0)} disabled={loading}>
-              {loading ? "Refreshing…" : "Refresh sign-ins"}
-            </button>
-          </div>
-          <div className="admin-login-stats">
-            <article><strong>{registeredCustomers}</strong><span>Registered accounts</span></article>
-            <article><strong>{customersLoggedIn}</strong><span>Customers who signed in</span></article>
-            <article><strong>{totalLogins}</strong><span>Recorded sign-ins</span></article>
-          </div>
-          {error && loginCustomers.length === 0 && <p className="admin-error admin-page-error" role="alert">{error}</p>}
-          <h3 className="admin-subheading">Customers who have signed in</h3>
-          {loginCustomers.length === 0 && !loading ? (
-            <section className="admin-empty">
-              <span>♙</span>
-              <h2>No sign-ins recorded yet</h2>
-              <p>Successful customer sign-ins will appear here from now on.</p>
+
+        {orderFormOpen && (
+          <div className="admin-modal-backdrop">
+            <section className="admin-order-modal" role="dialog" aria-modal="true" aria-labelledby="order-modal-title">
+              <div className="admin-modal-heading">
+                <div>
+                  <p className="admin-eyebrow">{editingOrderId ? "EDIT ORDER #" + editingOrderId : "NEW ADMIN ORDER"}</p>
+                  <h2 id="order-modal-title">{editingOrderId ? "Edit order" : "Create order"}</h2>
+                </div>
+                <button type="button" className="admin-modal-close" aria-label="Close" onClick={() => setOrderFormOpen(false)}>×</button>
+              </div>
+              <form className="admin-order-form" onSubmit={saveOrder}>
+                <div className="admin-form-grid">
+                  <label>Customer name
+                    <input value={orderDraft.customerName} maxLength="100" onChange={(event) => setOrderDraft({ ...orderDraft, customerName: event.target.value })} required />
+                  </label>
+                  <label>Phone number
+                    <input type="tel" inputMode="numeric" pattern="[0-9]{10}" maxLength="10" value={orderDraft.phone} onChange={(event) => setOrderDraft({ ...orderDraft, phone: event.target.value.replace(/\D/g, "").slice(0, 10) })} placeholder="10-digit mobile number" required />
+                  </label>
+                  <label className="full-field">Delivery address
+                    <textarea rows="2" maxLength="500" value={orderDraft.address} onChange={(event) => setOrderDraft({ ...orderDraft, address: event.target.value })} required />
+                  </label>
+                  <label>PIN code
+                    <input inputMode="numeric" pattern="[0-9]{6}" maxLength="6" value={orderDraft.pin} onChange={(event) => setOrderDraft({ ...orderDraft, pin: event.target.value.replace(/\D/g, "").slice(0, 6) })} required />
+                  </label>
+                  <label>Order type
+                    <select value={orderDraft.orderType} onChange={(event) => setOrderDraft({ ...orderDraft, orderType: event.target.value })}>
+                      <option value="product">Shop order</option><option value="subscription">Subscription</option>
+                    </select>
+                  </label>
+                  {orderDraft.orderType === "subscription" ? (
+                    <label className="full-field">Subscription plan
+                      <select value={orderDraft.planId} onChange={(event) => setOrderDraft({ ...orderDraft, planId: event.target.value })}>
+                        {adminPlans.map((plan) => <option value={plan.id} key={plan.id}>{plan.name}</option>)}
+                      </select>
+                    </label>
+                  ) : (
+                    <div className="admin-form-items full-field">
+                      <div className="admin-form-items-heading"><strong>Order items</strong><button type="button" onClick={() => setOrderDraft({ ...orderDraft, items: [...orderDraft.items, { productId: "1", size: "1 L", quantity: 1 }] })}>＋ Add item</button></div>
+                      {orderDraft.items.map((item, index) => {
+                        const sizes = sizesForProduct(item.productId);
+                        return (
+                          <div className="admin-order-item-row" key={index}>
+                            <select aria-label={"Product " + (index + 1)} value={item.productId} onChange={(event) => {
+                              const nextId = event.target.value;
+                              const nextItems = orderDraft.items.map((row, rowIndex) => rowIndex === index ? { ...row, productId: nextId, size: sizesForProduct(nextId)[0] } : row);
+                              setOrderDraft({ ...orderDraft, items: nextItems });
+                            }}>
+                              {adminProducts.map((product) => <option value={product.id} key={product.id}>{product.name}</option>)}
+                            </select>
+                            <select aria-label={"Size " + (index + 1)} value={item.size} onChange={(event) => setOrderDraft({ ...orderDraft, items: orderDraft.items.map((row, rowIndex) => rowIndex === index ? { ...row, size: event.target.value } : row) })}>
+                              {sizes.map((size) => <option value={size} key={size}>{size}</option>)}
+                            </select>
+                            <input aria-label={"Quantity " + (index + 1)} type="number" min="1" max="99" value={item.quantity} onChange={(event) => setOrderDraft({ ...orderDraft, items: orderDraft.items.map((row, rowIndex) => rowIndex === index ? { ...row, quantity: event.target.value } : row) })} required />
+                            <button type="button" className="admin-remove-item" aria-label={"Remove item " + (index + 1)} disabled={orderDraft.items.length < 2} onClick={() => setOrderDraft({ ...orderDraft, items: orderDraft.items.filter((_, rowIndex) => rowIndex !== index) })}>−</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <label className="full-field">Payment preference
+                    <select value={orderDraft.paymentMethod} onChange={(event) => setOrderDraft({ ...orderDraft, paymentMethod: event.target.value })}>
+                      {paymentMethods.map((method) => <option value={method} key={method}>{method.toUpperCase()}</option>)}
+                    </select>
+                  </label>
+                  <label className="admin-consent-row full-field">
+                    <input type="checkbox" checked={orderDraft.consent} onChange={(event) => setOrderDraft({ ...orderDraft, consent: event.target.checked })} required />
+                    <span>I confirm the customer agreed to save these order and delivery details.</span>
+                  </label>
+                </div>
+                {orderError && <p className="admin-error" role="alert">{orderError}</p>}
+                <div className="admin-modal-actions">
+                  <button type="button" onClick={() => setOrderFormOpen(false)}>Cancel</button>
+                  <button className="admin-primary" type="submit" disabled={orderSaving}>{orderSaving ? "Saving…" : editingOrderId ? "Save changes" : "Create order"}</button>
+                </div>
+              </form>
             </section>
-          ) : (
-            <div className="admin-login-table-wrap">
-              <table className="admin-login-table">
-                <thead><tr><th>Username</th><th>Name</th><th>Last sign-in</th><th>Sign-ins</th></tr></thead>
-                <tbody>
-                  {loginCustomers.map((customer) => (
-                    <tr key={customer.id}>
-                      <td><strong>{customer.username || "Username unavailable"}</strong></td>
-                      <td>{customer.name || "Name not added"}</td>
-                      <td>{customer.last_login_at ? formatDate(customer.last_login_at) : "—"}</td>
-                      <td>{customer.login_count}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {loginCustomersTotal > pageSize && (
-            <nav className="admin-pagination" aria-label="Customer sign-in pages">
-              <button type="button" onClick={() => loadLoginCustomers(Math.max(0, loginOffset - pageSize))} disabled={loginOffset === 0 || loading}>Newer</button>
-              <span>{loginOffset + 1}–{Math.min(loginOffset + loginCustomers.length, loginCustomersTotal)} of {loginCustomersTotal}</span>
-              <button type="button" onClick={() => loadLoginCustomers(loginOffset + pageSize)} disabled={loginOffset + pageSize >= loginCustomersTotal || loading}>Older</button>
-            </nav>
-          )}
-          <h3 className="admin-subheading">Recent sign-in activity</h3>
-          {recentLogins.length === 0 ? (
-            <p className="admin-activity-empty">No sign-in events yet.</p>
-          ) : (
-            <div className="admin-recent-logins">
-              {recentLogins.map((login) => (
-                <article key={login.id}>
-                  <div><strong>{login.name || login.username || "Customer"}</strong><span>{login.username ? "@" + login.username : "Username unavailable"}</span></div>
-                  <time dateTime={login.logged_in_at}>{formatDate(login.logged_in_at)}</time>
-                </article>
-              ))}
-            </div>
-          )}
-          <p className="admin-privacy-note">Sign-in tracking starts when this update goes live. Earlier sign-ins were not recorded. Passwords and delivery addresses are not shown here.</p>
-        </section>
-        <p className="admin-privacy-note">Customer delivery details are shown only in this signed-in dashboard.</p>
+          </div>
+        )}
+        <p className="admin-privacy-note">All customer and order management actions are restricted to admin sign-in.</p>
       </section>
     </main>
   );

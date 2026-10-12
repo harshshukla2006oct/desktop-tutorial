@@ -683,6 +683,167 @@ app.post("/api/admin/logout", (_req, res) => {
   return res.json({ authenticated: false });
 });
 
+app.post("/api/admin/orders", requireAdmin, async (req, res) => {
+  const customerError = validateCustomer(req.body?.customer, req.body?.consent);
+  if (customerError) return res.status(400).json({ error: customerError });
+  if (!paymentMethods.has(req.body?.paymentMethod)) return res.status(400).json({ error: "Choose a valid payment preference." });
+  const orderType = req.body?.orderType;
+  const calculated = orderType === "subscription"
+    ? calculateSubscriptionItem(req.body?.planId)
+    : orderType === "product"
+      ? calculateProductItems(req.body?.items)
+      : { error: "Choose a valid order type." };
+  if (calculated.error) return res.status(400).json({ error: calculated.error });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const saved = await client.query(
+      "INSERT INTO customer_orders (customer_name, phone, delivery_address, postal_code, order_type, items, total_rupees, payment_method, consented_at, customer_id) " +
+      "VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,NOW(),(SELECT id FROM customer_accounts WHERE phone = $2)) " +
+      "RETURNING id, created_at",
+      [req.body.customer.name.trim(), req.body.customer.phone, req.body.customer.address.trim(), req.body.customer.pin, orderType, JSON.stringify(calculated.items), calculated.total, req.body.paymentMethod],
+    );
+    const orderId = saved.rows[0].id;
+    await client.query(
+      "INSERT INTO admin_data_logs (action, entity_id, details) VALUES ('created',$1,$2::jsonb)",
+      [orderId, JSON.stringify({ orderType, total: calculated.total, paymentMethod: req.body.paymentMethod })],
+    );
+    await client.query("COMMIT");
+    return res.status(201).json({ id: orderId, createdAt: saved.rows[0].created_at, total: calculated.total });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Admin could not create the order:", error.message);
+    return res.status(500).json({ error: "The order could not be created." });
+  } finally {
+    client.release();
+  }
+});
+
+app.patch("/api/admin/orders/:id", requireAdmin, async (req, res) => {
+  const orderId = Number.parseInt(req.params.id, 10);
+  if (!Number.isSafeInteger(orderId) || orderId < 1) return res.status(400).json({ error: "Invalid order number." });
+  const customerError = validateCustomer(req.body?.customer, req.body?.consent);
+  if (customerError) return res.status(400).json({ error: customerError });
+  if (!paymentMethods.has(req.body?.paymentMethod)) return res.status(400).json({ error: "Choose a valid payment preference." });
+  const orderType = req.body?.orderType;
+  const calculated = orderType === "subscription"
+    ? calculateSubscriptionItem(req.body?.planId)
+    : orderType === "product"
+      ? calculateProductItems(req.body?.items)
+      : { error: "Choose a valid order type." };
+  if (calculated.error) return res.status(400).json({ error: calculated.error });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const previousResult = await client.query("SELECT * FROM customer_orders WHERE id = $1 AND deleted_at IS NULL FOR UPDATE", [orderId]);
+    const previous = previousResult.rows[0];
+    if (!previous) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Active order not found." });
+    }
+    const updated = await client.query(
+      "UPDATE customer_orders SET customer_name=$2, phone=$3, delivery_address=$4, postal_code=$5, order_type=$6, items=$7::jsonb, total_rupees=$8, payment_method=$9, customer_id=(SELECT id FROM customer_accounts WHERE phone = $3) WHERE id=$1 RETURNING id, created_at",
+      [orderId, req.body.customer.name.trim(), req.body.customer.phone, req.body.customer.address.trim(), req.body.customer.pin, orderType, JSON.stringify(calculated.items), calculated.total, req.body.paymentMethod],
+    );
+    const changedFields = [];
+    if (previous.customer_name !== req.body.customer.name.trim()) changedFields.push("customer name");
+    if (previous.phone.trim() !== req.body.customer.phone) changedFields.push("phone");
+    if (previous.delivery_address !== req.body.customer.address.trim()) changedFields.push("delivery address");
+    if (previous.postal_code.trim() !== req.body.customer.pin) changedFields.push("PIN");
+    if (previous.order_type !== orderType) changedFields.push("order type");
+    if (JSON.stringify(previous.items) !== JSON.stringify(calculated.items)) changedFields.push("items");
+    if (Number(previous.total_rupees) !== calculated.total) changedFields.push("total");
+    if (previous.payment_method !== req.body.paymentMethod) changedFields.push("payment preference");
+    await client.query(
+      "INSERT INTO admin_data_logs (action, entity_id, details) VALUES ('updated',$1,$2::jsonb)",
+      [orderId, JSON.stringify({ changedFields, previousTotal: Number(previous.total_rupees), newTotal: calculated.total })],
+    );
+    await client.query("COMMIT");
+    return res.json({ id: updated.rows[0].id, createdAt: updated.rows[0].created_at, total: calculated.total });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Admin could not update the order:", error.message);
+    return res.status(500).json({ error: "The order could not be updated." });
+  } finally {
+    client.release();
+  }
+});
+
+app.delete("/api/admin/orders/:id", requireAdmin, async (req, res) => {
+  const orderId = Number.parseInt(req.params.id, 10);
+  if (!Number.isSafeInteger(orderId) || orderId < 1) return res.status(400).json({ error: "Invalid order number." });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      "UPDATE customer_orders SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL RETURNING id, deleted_at",
+      [orderId],
+    );
+    if (!result.rows[0]) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Active order not found." });
+    }
+    await client.query(
+      "INSERT INTO admin_data_logs (action, entity_id, details) VALUES ('deleted',$1,$2::jsonb)",
+      [orderId, JSON.stringify({ deletedAt: result.rows[0].deleted_at })],
+    );
+    await client.query("COMMIT");
+    return res.json({ id: orderId, deleted: true });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Admin could not delete the order:", error.message);
+    return res.status(500).json({ error: "The order could not be deleted." });
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/api/admin/orders/:id/restore", requireAdmin, async (req, res) => {
+  const orderId = Number.parseInt(req.params.id, 10);
+  if (!Number.isSafeInteger(orderId) || orderId < 1) return res.status(400).json({ error: "Invalid order number." });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      "UPDATE customer_orders SET deleted_at=NULL WHERE id=$1 AND deleted_at IS NOT NULL RETURNING id",
+      [orderId],
+    );
+    if (!result.rows[0]) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Deleted order not found." });
+    }
+    await client.query(
+      "INSERT INTO admin_data_logs (action, entity_id, details) VALUES ('restored',$1,'{}'::jsonb)",
+      [orderId],
+    );
+    await client.query("COMMIT");
+    return res.json({ id: orderId, restored: true });
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Admin could not restore the order:", error.message);
+    return res.status(500).json({ error: "The order could not be restored." });
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/admin/data-logs", requireAdmin, async (req, res) => {
+  const parsedLimit = Number.parseInt(req.query.limit, 10);
+  const parsedOffset = Number.parseInt(req.query.offset, 10);
+  const limit = Number.isInteger(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 100) : 50;
+  const offset = Number.isInteger(parsedOffset) ? Math.min(Math.max(parsedOffset, 0), 1000000) : 0;
+  try {
+    const [entries, count] = await Promise.all([
+      pool.query("SELECT id, action, entity_type, entity_id, details, created_at FROM admin_data_logs ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2", [limit, offset]),
+      pool.query("SELECT COUNT(*)::int AS total FROM admin_data_logs"),
+    ]);
+    return res.json({ entries: entries.rows, total: count.rows[0].total, limit, offset });
+  } catch (error) {
+    console.error("Admin data logs could not be loaded:", error.message);
+    return res.status(500).json({ error: "Data logs could not be loaded." });
+  }
+});
+
 app.get("/api/admin/customer-logins", requireAdmin, async (req, res) => {
   const parsedLimit = Number.parseInt(req.query.limit, 10);
   const parsedOffset = Number.parseInt(req.query.offset, 10);
@@ -734,8 +895,8 @@ app.get("/api/admin/orders", requireAdmin, async (req, res) => {
     const [entries, count] = await Promise.all([
       pool.query(
         "SELECT id, created_at, customer_name, phone, delivery_address, postal_code, " +
-        "order_type, items, total_rupees, payment_method FROM customer_orders " +
-        "ORDER BY created_at DESC, id DESC LIMIT $1 OFFSET $2",
+        "order_type, items, total_rupees, payment_method, deleted_at FROM customer_orders " +
+        "ORDER BY deleted_at NULLS FIRST, created_at DESC, id DESC LIMIT $1 OFFSET $2",
         [limit, offset],
       ),
       pool.query("SELECT COUNT(*)::int AS total FROM customer_orders"),
@@ -765,8 +926,19 @@ async function start() {
     "order_type VARCHAR(20) NOT NULL CHECK (order_type IN ('product', 'subscription')), " +
     "items JSONB NOT NULL, total_rupees INTEGER NOT NULL CHECK (total_rupees > 0), " +
     "payment_method VARCHAR(20) NOT NULL CHECK (payment_method IN ('upi', 'card', 'emi', 'netbanking', 'cod')), " +
-    "consented_at TIMESTAMPTZ NOT NULL)"
+    "consented_at TIMESTAMPTZ NOT NULL, deleted_at TIMESTAMPTZ)"
   );
+  await pool.query("ALTER TABLE customer_orders ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
+  await pool.query("CREATE INDEX IF NOT EXISTS customer_orders_active_created_idx ON customer_orders (created_at DESC) WHERE deleted_at IS NULL");
+  await pool.query(
+    "CREATE TABLE IF NOT EXISTS admin_data_logs (" +
+    "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, " +
+    "action VARCHAR(16) NOT NULL CHECK (action IN ('created', 'updated', 'deleted', 'restored')), " +
+    "entity_type VARCHAR(24) NOT NULL DEFAULT 'order', entity_id BIGINT NOT NULL, " +
+    "details JSONB NOT NULL DEFAULT '{}'::jsonb, " +
+    "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+  );
+  await pool.query("CREATE INDEX IF NOT EXISTS admin_data_logs_created_idx ON admin_data_logs (created_at DESC, id DESC)");
   await pool.query(
     "CREATE TABLE IF NOT EXISTS customer_accounts (" +
     "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, " +
