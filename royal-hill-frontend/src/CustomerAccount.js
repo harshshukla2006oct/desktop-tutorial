@@ -79,7 +79,7 @@ function CustomerAccount({ onBack }) {
       .then((result) => { if (current) setSubscriptionDays(result.entries || []); })
       .catch((error) => { if (current) setMessage(error.message); });
     return () => { current = false; };
-  }, [authenticated, calendarMonth]);
+  }, [authenticated, calendarMonth, dailyOrders]);
 
   useEffect(() => {
     const url = new URL(window.location.href);
