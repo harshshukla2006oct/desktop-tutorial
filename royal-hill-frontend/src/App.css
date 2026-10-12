@@ -359,3 +359,62 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
 @media(prefers-reduced-motion:reduce) {
   *,*::before,*::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+
+/* First-order account step in checkout */
+.checkout-register-panel {
+  max-width: 580px;
+  margin: 0 auto;
+  padding: 8px 0 4px;
+  animation: dairy-rise .42s cubic-bezier(.2,.75,.25,1) both;
+}
+.checkout-auth-switch {
+  display: flex;
+  gap: 8px;
+  padding: 5px;
+  margin: 24px 0 20px;
+  width: fit-content;
+  border: 1px solid #dceaf6;
+  border-radius: 13px;
+  background: #f3f9ff;
+}
+.checkout-auth-switch button {
+  border: 0;
+  border-radius: 9px;
+  padding: 10px 15px;
+  background: transparent;
+  color: #55738f;
+  font-size: 13px;
+  font-weight: 700;
+  transition: background .2s ease,color .2s ease,box-shadow .2s ease,transform .2s ease;
+}
+.checkout-auth-switch button.active {
+  color: #155a9c;
+  background: #fff;
+  box-shadow: 0 3px 10px rgba(23,75,126,.1);
+}
+.checkout-auth-switch button:active { transform: scale(.97); }
+.checkout-auth-form { display: grid; gap: 16px; }
+.checkout-auth-form label { display: grid; gap: 8px; color: #254c70; font-size: 13px; font-weight: 700; }
+.checkout-auth-form input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 14px;
+  border: 1px solid #d7e5f2;
+  border-radius: 11px;
+  outline: 0;
+  background: #fff;
+  color: #18334f;
+  font-size: 14px;
+  transition: border-color .2s ease,box-shadow .2s ease;
+}
+.checkout-auth-form input:focus { border-color: #65a3dc; box-shadow: 0 0 0 4px rgba(76,150,218,.12); }
+.checkout-auth-form .checkout-primary { width: 100%; margin-top: 4px; }
+.checkout-auth-form .checkout-primary:disabled,.checkout-form .checkout-primary:disabled { opacity: .65; cursor: wait; }
+.checkout-auth-error { margin: 0; color: #b42318; font-size: 13px; }
+.checkout-auth-note { margin: 18px 0 0; color: #71879d; font-size: 12px; line-height: 1.55; }
+@media(max-width:600px) {
+  .checkout-register-panel { padding: 0; }
+  .checkout-auth-switch { width: 100%; }
+  .checkout-auth-switch button { flex: 1; }
+}

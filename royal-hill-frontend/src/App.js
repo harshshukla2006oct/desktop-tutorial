@@ -81,6 +81,14 @@ function App() {
   const [paymentMethod, setPaymentMethod] = useState("upi");
   const [notice, setNotice] = useState("");
   const [orderSubmitting, setOrderSubmitting] = useState(false);
+  const [accountSessionChecked, setAccountSessionChecked] = useState(false);
+  const [checkoutAuthRequired, setCheckoutAuthRequired] = useState(false);
+  const [checkoutAuthMode, setCheckoutAuthMode] = useState("register");
+  const [checkoutUsername, setCheckoutUsername] = useState("");
+  const [checkoutPassword, setCheckoutPassword] = useState("");
+  const [checkoutConfirmPassword, setCheckoutConfirmPassword] = useState("");
+  const [checkoutAuthBusy, setCheckoutAuthBusy] = useState(false);
+  const [checkoutAuthError, setCheckoutAuthError] = useState("");
   const [subscriptionPage, setSubscriptionPage] = useState(() => {
     const requestedPage = new URLSearchParams(window.location.search).get("subscription");
     return requestedPage === "details" ? "details" : requestedPage === "plans" ? "plans" : "closed";
@@ -97,6 +105,7 @@ function App() {
         if (!current) return;
         const profile = result?.profile || null;
         setAccountProfile(profile);
+        setAccountSessionChecked(true);
         if (profile) setCustomer((customer) => ({
           name: customer.name || profile.name || "",
           phone: customer.phone || profile.phone || "",
@@ -104,7 +113,7 @@ function App() {
           pin: customer.pin || profile.pin || "",
         }));
       })
-      .catch(() => { if (current) setAccountProfile(null); });
+      .catch(() => { if (current) { setAccountProfile(null); setAccountSessionChecked(true); } });
     return () => { current = false; };
   }, []);
 
@@ -191,6 +200,48 @@ function App() {
       setNotice(error.message || "We could not save your request. Please try again.");
     } finally {
       setOrderSubmitting(false);
+    }
+  };
+
+  const continueCheckoutAuth = async (event) => {
+    event.preventDefault();
+    setCheckoutAuthBusy(true);
+    setCheckoutAuthError("");
+    if (checkoutAuthMode === "register" && checkoutPassword !== checkoutConfirmPassword) {
+      setCheckoutAuthError("The passwords do not match.");
+      setCheckoutAuthBusy(false);
+      return;
+    }
+    try {
+      const response = await fetch(checkoutAuthMode === "register" ? "/api/auth/register" : "/api/auth/login", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: checkoutUsername.trim(), password: checkoutPassword }),
+      });
+      let result = {};
+      try { result = await response.json(); } catch { result = {}; }
+      if (!response.ok) throw new Error(result.error || "We couldn’t complete that request. Please try again.");
+
+      const sessionResponse = await fetch("/api/account/session", { credentials: "same-origin" });
+      const session = sessionResponse.ok ? await sessionResponse.json() : null;
+      const profile = session?.profile || null;
+      if (!profile) throw new Error("Your account was created, but we couldn’t load your session. Please sign in to continue.");
+      setAccountProfile(profile);
+      setAccountSessionChecked(true);
+      setCustomer((current) => ({
+        name: current.name || profile.name || "",
+        phone: current.phone || profile.phone || "",
+        address: current.address || profile.address || "",
+        pin: current.pin || profile.pin || "",
+      }));
+      setCheckoutAuthRequired(false);
+      setCheckoutStep("payment");
+      window.scrollTo(0, 0);
+    } catch (error) {
+      setCheckoutAuthError(error.message || "We couldn’t complete that request. Please try again.");
+    } finally {
+      setCheckoutAuthBusy(false);
     }
   };
 
@@ -290,8 +341,11 @@ function App() {
           <a className="logo" href="#home" onClick={(event) => { event.preventDefault(); setCheckoutStep("shop"); }}>
             <img className="logo-mark" src="/royal-hill-mark.svg" alt="" /><span>Royal Hill <b>Dairy</b></span>
           </a>
-          <button className="checkout-back" onClick={() => setCheckoutStep(checkoutStep === "payment" ? "details" : "shop")}>
-            ← {checkoutStep === "payment" ? "Back to details" : "Back to shop"}
+          <button className="checkout-back" onClick={() => {
+            if (checkoutAuthRequired) setCheckoutAuthRequired(false);
+            else setCheckoutStep(checkoutStep === "payment" ? "details" : "shop");
+          }}>
+            ← {checkoutAuthRequired ? "Back to details" : checkoutStep === "payment" ? "Back to details" : "Back to shop"}
           </button>
         </header>
 
@@ -300,7 +354,9 @@ function App() {
             <div className="checkout-steps">
               <span className={checkoutStep === "details" ? "current" : "done"}>1&nbsp; Delivery details</span>
               <i />
-              <span className={checkoutStep === "payment" ? "current" : ""}>2&nbsp; Payment</span>
+              <span className={checkoutAuthRequired ? "current" : accountProfile || checkoutStep === "payment" ? "done" : ""}>2&nbsp; Account</span>
+              <i />
+              <span className={checkoutStep === "payment" ? "current" : ""}>3&nbsp; Payment</span>
             </div>
 
             {checkoutStep === "details" ? (
@@ -308,15 +364,61 @@ function App() {
                 <p className="eyebrow">ALMOST THERE</p>
                 <h1>Where should we deliver?</h1>
                 <p className="checkout-intro">Add your contact and address details for delivery.</p>
-                <form className="checkout-form" onSubmit={(event) => { event.preventDefault(); setCheckoutStep("payment"); window.scrollTo(0, 0); }}>
+                <form className="checkout-form" onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!accountSessionChecked) return;
+                  if (accountProfile) {
+                    setCheckoutStep("payment");
+                    window.scrollTo(0, 0);
+                  } else {
+                    setCheckoutAuthRequired(true);
+                    setCheckoutAuthMode("register");
+                    setCheckoutAuthError("");
+                    window.scrollTo(0, 0);
+                  }
+                }}>
                   <label>Full name<input name="name" value={customer.name} onChange={updateCustomer} placeholder="Your name" autoComplete="name" required /></label>
                   <label>Phone number<input name="phone" type="tel" inputMode="numeric" pattern="[0-9]{10}" maxLength="10" value={customer.phone} onChange={updateCustomer} placeholder="10-digit mobile number" autoComplete="tel" required /></label>
                   <label className="full-field">Delivery address<textarea name="address" rows="3" value={customer.address} onChange={updateCustomer} placeholder="House / flat, street, area" autoComplete="street-address" required /></label>
                   <label>PIN code<input name="pin" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" value={customer.pin} onChange={updateCustomer} placeholder="6-digit PIN code" autoComplete="postal-code" required /></label>
                   <label className="full-field consent-row"><input type="checkbox" checked={customerConsent} onChange={(event) => setCustomerConsent(event.target.checked)} required /><span>I agree to send these details to Royal Hill Dairy to handle my order request.</span></label>
-                  <button className="checkout-primary full-field" type="submit">Proceed to payment <span>→</span></button>
+                  <button className="checkout-primary full-field" type="submit" disabled={!accountSessionChecked}>
+                    {!accountSessionChecked ? "Checking account…" : accountProfile ? "Proceed to payment" : "Continue to create account"} <span>→</span>
+                  </button>
                 </form>
               </>
+            ) : checkoutAuthRequired ? (
+              <section className="checkout-register-panel">
+                <p className="eyebrow">{checkoutAuthMode === "register" ? "YOUR FIRST ORDER" : "WELCOME BACK"}</p>
+                <h1>{checkoutAuthMode === "register" ? "Create your account" : "Sign in to continue"}</h1>
+                <p className="checkout-intro">
+                  {checkoutAuthMode === "register"
+                    ? "Create a Royal Hill account to continue to payment and keep your orders together."
+                    : "Sign in to continue to payment with your Royal Hill account."}
+                </p>
+                <div className="checkout-auth-switch" role="group" aria-label="Choose account action">
+                  <button type="button" className={checkoutAuthMode === "register" ? "active" : ""} onClick={() => { setCheckoutAuthMode("register"); setCheckoutAuthError(""); }}>Create account</button>
+                  <button type="button" className={checkoutAuthMode === "login" ? "active" : ""} onClick={() => { setCheckoutAuthMode("login"); setCheckoutAuthError(""); }}>Sign in</button>
+                </div>
+                <form className="checkout-auth-form" onSubmit={continueCheckoutAuth}>
+                  <label>Username
+                    <input name="username" autoComplete="username" autoCapitalize="none" maxLength="32" value={checkoutUsername} onChange={(event) => setCheckoutUsername(event.target.value)} placeholder="Choose a unique username" required />
+                  </label>
+                  <label>Password
+                    <input name="password" type="password" autoComplete={checkoutAuthMode === "register" ? "new-password" : "current-password"} minLength="8" maxLength="128" value={checkoutPassword} onChange={(event) => setCheckoutPassword(event.target.value)} placeholder="At least 8 characters" required />
+                  </label>
+                  {checkoutAuthMode === "register" && (
+                    <label>Confirm password
+                      <input name="confirmPassword" type="password" autoComplete="new-password" minLength="8" maxLength="128" value={checkoutConfirmPassword} onChange={(event) => setCheckoutConfirmPassword(event.target.value)} placeholder="Enter your password again" required />
+                    </label>
+                  )}
+                  {checkoutAuthError && <p className="checkout-auth-error" role="alert">{checkoutAuthError}</p>}
+                  <button className="checkout-primary" type="submit" disabled={checkoutAuthBusy}>
+                    {checkoutAuthBusy ? "Please wait…" : checkoutAuthMode === "register" ? "Create account and continue" : "Sign in and continue"} <span>→</span>
+                  </button>
+                </form>
+                <p className="checkout-auth-note">Your delivery details stay ready while you create an account or sign in.</p>
+              </section>
             ) : (
               <>
                 <p className="eyebrow">SAFE & SIMPLE CHECKOUT</p>
