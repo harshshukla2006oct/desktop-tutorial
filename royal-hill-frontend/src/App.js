@@ -82,8 +82,11 @@ function App() {
   const [paymentMethod, setPaymentMethod] = useState("upi");
   const [notice, setNotice] = useState("");
   const [orderSubmitting, setOrderSubmitting] = useState(false);
-  const [subscriptionPage, setSubscriptionPage] = useState("closed");
-  const [selectedPlan, setSelectedPlan] = useState(null);
+  const [subscriptionPage, setSubscriptionPage] = useState(() => {
+    const requestedPage = new URLSearchParams(window.location.search).get("subscription");
+    return requestedPage === "details" ? "details" : requestedPage === "plans" ? "plans" : "closed";
+  });
+  const [selectedPlan, setSelectedPlan] = useState(() => subscriptionPlans.find((plan) => plan.id === new URLSearchParams(window.location.search).get("plan")) || null);
   const [showAccount, setShowAccount] = useState(() => window.location.pathname === "/customer" || new URLSearchParams(window.location.search).get("account") === "1");
   const [accountProfile, setAccountProfile] = useState(null);
 
@@ -91,7 +94,17 @@ function App() {
     let current = true;
     fetch("/api/account/session", { credentials: "same-origin" })
       .then((response) => response.ok ? response.json() : null)
-      .then((result) => { if (current) setAccountProfile(result?.profile || null); })
+      .then((result) => {
+        if (!current) return;
+        const profile = result?.profile || null;
+        setAccountProfile(profile);
+        if (profile) setCustomer((customer) => ({
+          name: customer.name || profile.name || "",
+          phone: customer.phone || profile.phone || "",
+          address: customer.address || profile.address || "",
+          pin: customer.pin || profile.pin || "",
+        }));
+      })
       .catch(() => { if (current) setAccountProfile(null); });
     return () => { current = false; };
   }, []);
@@ -168,6 +181,11 @@ function App() {
       setCustomerConsent(false);
       setCheckoutStep("shop");
       setSubscriptionPage("closed");
+      if (orderType === "subscription" && accountProfile) {
+        window.location.assign("/customer?subscription=updated");
+        return;
+      }
+      window.history.replaceState({}, "", window.location.pathname);
       window.scrollTo(0, 0);
       window.setTimeout(() => setNotice(""), 6000);
     } catch (error) {

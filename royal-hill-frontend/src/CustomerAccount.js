@@ -49,6 +49,7 @@ function CustomerAccount({ onBack }) {
   const [calendarMonth, setCalendarMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [selectedSubscriptionDate, setSelectedSubscriptionDate] = useState(() => getLocalDateKey(new Date()));
   const [subscriptionDays, setSubscriptionDays] = useState([]);
+  const [subscriptionStatus, setSubscriptionStatus] = useState(null);
 
   useEffect(() => {
     let current = true;
@@ -57,12 +58,14 @@ function CustomerAccount({ onBack }) {
         if (!current) return;
         setAuthenticated(true);
         setProfile(result.profile);
-        const [daily, orders] = await Promise.all([
+        const [daily, orders, subscription] = await Promise.all([
           accountRequest("/api/account/daily-orders"),
           accountRequest("/api/account/orders?limit=50&offset=0"),
+          accountRequest("/api/account/subscription").catch(() => ({ active: false })),
         ]);
         if (!current) return;
         setDailyOrders(daily.entries);
+        setSubscriptionStatus(subscription);
         setHistory(orders.entries);
         setHistoryOffset(orders.entries.length);
         setHistoryHasMore(orders.hasMore);
@@ -73,18 +76,19 @@ function CustomerAccount({ onBack }) {
   }, []);
 
   useEffect(() => {
-    if (!authenticated) return undefined;
+    if (!authenticated || !subscriptionStatus?.active) return undefined;
     let current = true;
     accountRequest("/api/account/subscription-days?month=" + getMonthKey(calendarMonth))
       .then((result) => { if (current) setSubscriptionDays(result.entries || []); })
       .catch((error) => { if (current) setMessage(error.message); });
     return () => { current = false; };
-  }, [authenticated, calendarMonth, dailyOrders]);
+  }, [authenticated, subscriptionStatus?.active, calendarMonth, dailyOrders]);
 
   useEffect(() => {
     const url = new URL(window.location.href);
-    if (url.searchParams.has("account")) {
+    if (url.searchParams.has("account") || url.searchParams.has("subscription")) {
       url.searchParams.delete("account");
+      url.searchParams.delete("subscription");
       window.history.replaceState({}, "", url.pathname + url.search + url.hash);
     }
   }, []);
@@ -283,8 +287,31 @@ function CustomerAccount({ onBack }) {
             )}
 
 
-            {tab === "Your subscription" && (
+            {tab === "Your subscription" && !subscriptionStatus?.active && (
               <div className="account-subscription-section">
+                <div className="account-section-heading"><div><h2>Choose a subscription plan</h2><p>Your delivery calendar will appear here after you save a subscription plan.</p></div></div>
+                <div className="account-plan-grid">
+                  <article className="account-plan-card">
+                    <span className="account-plan-icon">🥛</span><h3>Daily Cow Milk</h3>
+                    <p>1 litre of fresh cow milk scheduled daily for 30 days.</p>
+                    <strong>₹260 <small>/ 30 days</small></strong>
+                    <button type="button" className="checkout-primary" onClick={() => window.location.assign("/?subscription=details&plan=daily-milk")}>Choose plan <span>→</span></button>
+                  </article>
+                  <article className="account-plan-card">
+                    <span className="account-plan-icon">✦</span><h3>Fresh Plus</h3>
+                    <p>Same-day dairy delivery with member extras for 30 days.</p>
+                    <strong>₹460 <small>/ 30 days</small></strong>
+                    <button type="button" className="checkout-primary" onClick={() => window.location.assign("/?subscription=details&plan=fresh-plus")}>Choose plan <span>→</span></button>
+                  </article>
+                </div>
+                <p className="account-plan-note">You’ll continue to the plan request page. The current checkout saves a request and does not take payment online.</p>
+              </div>
+            )}
+
+            {tab === "Your subscription" && subscriptionStatus?.active && (
+              <div className="account-subscription-section">
+                <div className="account-section-heading"><div><h2>{subscriptionStatus.planName || "Your active plan"}</h2><p>Choose which days you want milk delivered.</p></div></div>
+
                 <div className="account-section-heading"><div><h2>Choose your milk delivery days</h2><p>Each new day starts ON. Turn a day OFF to cancel that delivery.</p></div></div>
                 <div className="subscription-calendar-layout">
                   <section className="subscription-calendar-card" aria-label="Delivery calendar">

@@ -350,6 +350,32 @@ app.put("/api/account/profile", requireCustomer, async (req, res) => {
 });
 
 
+
+app.get("/api/account/subscription", requireCustomer, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, created_at, items, total_rupees, created_at + INTERVAL '30 days' AS ends_at " +
+      "FROM customer_orders WHERE customer_id = $1 AND order_type = 'subscription' " +
+      "AND created_at > NOW() - INTERVAL '30 days' ORDER BY created_at DESC, id DESC LIMIT 1",
+      [req.customerSession.customerId],
+    );
+    if (!result.rowCount) return res.json({ active: false });
+    const subscription = result.rows[0];
+    const items = Array.isArray(subscription.items) ? subscription.items : [];
+    return res.json({
+      active: true,
+      id: subscription.id,
+      planName: items[0]?.name || "Active subscription",
+      totalRupees: subscription.total_rupees,
+      startsAt: subscription.created_at,
+      endsAt: subscription.ends_at,
+    });
+  } catch (error) {
+    console.error("Customer subscription could not be loaded:", error.message);
+    return res.status(500).json({ error: "Your subscription could not be loaded." });
+  }
+});
+
 app.get("/api/account/subscription-days", requireCustomer, async (req, res) => {
   const month = typeof req.query.month === "string" ? req.query.month : "";
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: "Choose a valid calendar month." });
