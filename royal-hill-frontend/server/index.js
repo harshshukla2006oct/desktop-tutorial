@@ -433,6 +433,16 @@ app.put("/api/account/subscription-days/:date", requireCustomer, requireActiveCu
   if (!Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== deliveryDate) return res.status(400).json({ error: "Choose a valid delivery date." });
   const indiaToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   if (deliveryDate < indiaToday) return res.status(400).json({ error: "Past delivery days can’t be changed." });
+  const indiaDateKey = (value) => {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
+    const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+    return values.year + "-" + values.month + "-" + values.day;
+  };
+  const subscriptionStartDate = indiaDateKey(req.activeCustomerSubscription.created_at);
+  const subscriptionEndDate = indiaDateKey(req.activeCustomerSubscription.ends_at);
+  if (deliveryDate < subscriptionStartDate || deliveryDate > subscriptionEndDate) {
+    return res.status(403).json({ error: "Choose a day within your 30-day subscription period." });
+  }
   const status = req.body?.status;
   if (status !== "on" && status !== "off") return res.status(400).json({ error: "Choose ON or OFF for this delivery day." });
   try {

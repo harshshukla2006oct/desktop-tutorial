@@ -29,6 +29,11 @@ async function accountRequest(path, options = {}) {
 const getLocalDateKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const getMonthKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 const getDateFromKey = (key) => { const [year, month, day] = key.split("-").map(Number); return new Date(year, month - 1, day); };
+const getIndiaDateKey = (value) => {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
+  const dateParts = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+};
 
 function CustomerAccount({ onBack }) {
   const [loading, setLoading] = useState(true);
@@ -220,6 +225,9 @@ function CustomerAccount({ onBack }) {
   };
 
   const todayKey = getLocalDateKey(new Date());
+  const subscriptionStartDate = subscriptionStatus?.startsAt ? getIndiaDateKey(subscriptionStatus.startsAt) : "";
+  const subscriptionEndDate = subscriptionStatus?.endsAt ? getIndiaDateKey(subscriptionStatus.endsAt) : "";
+  const selectedDateInSubscription = selectedSubscriptionDate >= subscriptionStartDate && selectedSubscriptionDate <= subscriptionEndDate;
   const selectedDay = subscriptionDays.find((entry) => String(entry.delivery_date).slice(0, 10) === selectedSubscriptionDate);
   const activeMilkItems = dailyOrders.filter((entry) => entry.is_active && accountProducts.find((product) => product.id === Number(entry.product_id))?.milk);
   const calendarStart = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
@@ -331,7 +339,7 @@ function CustomerAccount({ onBack }) {
               <div className="account-subscription-section">
                 <div className="account-section-heading"><div><h2>{subscriptionStatus.planName || "Your active plan"}</h2><p>30-day subscription · Access expires {new Date(subscriptionStatus.endsAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}. Choose which days you want milk delivered.</p></div></div>
 
-                <div className="account-section-heading"><div><h2>Choose your milk delivery days</h2><p>Each new day starts ON. Turn a day OFF to cancel that delivery.</p></div></div>
+                <div className="account-section-heading"><div><h2>Choose your milk delivery days</h2><p>Every day in your 30-day plan is marked ON. Turn a day OFF to cancel that delivery.</p></div></div>
                 <div className="subscription-calendar-layout">
                   <section className="subscription-calendar-card" aria-label="Delivery calendar">
                     <div className="subscription-calendar-heading">
@@ -345,8 +353,8 @@ function CustomerAccount({ onBack }) {
                         if (!date) return <span className="subscription-calendar-blank" key={"blank-" + index} />;
                         const dateKey = getLocalDateKey(date);
                         const savedDay = subscriptionDays.find((entry) => String(entry.delivery_date).slice(0, 10) === dateKey);
-                        const defaultOn = dateKey >= todayKey && activeMilkItems.length > 0;
-                        const status = savedDay?.status || (defaultOn ? "on" : "");
+                        const isWithinSubscription = dateKey >= subscriptionStartDate && dateKey <= subscriptionEndDate;
+                        const status = isWithinSubscription ? (savedDay?.status === "off" ? "off" : "on") : "";
                         const isSelected = selectedSubscriptionDate === dateKey;
                         return (
                           <button type="button" key={dateKey} className={"subscription-calendar-day " + (isSelected ? "selected " : "") + (status ? status : "") + (dateKey === todayKey ? " today" : "")} onClick={() => { setSelectedSubscriptionDate(dateKey); setMessage(""); }} aria-label={date.toLocaleDateString(undefined, { dateStyle: "full" }) + (status === "on" ? ", delivery on" : status === "off" ? ", delivery cancelled" : "")}>
@@ -360,10 +368,10 @@ function CustomerAccount({ onBack }) {
                   <section className="subscription-day-card">
                     <p className="eyebrow">DELIVERY PREFERENCE</p>
                     <h3>{getDateFromKey(selectedSubscriptionDate).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</h3>
-                    <p className="subscription-day-caption">{selectedDay?.status === "off" ? "You cancelled milk for this day." : selectedDay?.status === "on" ? "Milk delivery is scheduled for this day." : selectedSubscriptionDate < todayKey ? "No saved delivery choice for this day." : "New days start ON automatically."}</p>
+                    <p className="subscription-day-caption">{selectedDay?.status === "off" ? "You cancelled milk for this day." : !selectedDateInSubscription ? "This date is outside your 30-day subscription period." : "Milk delivery is ON by default for your subscription."}</p>
                     <div className="subscription-toggle" role="group" aria-label="Milk delivery for selected day">
-                      <button type="button" className={(selectedDay?.status !== "off" ? "active on" : "")} disabled={busy || selectedSubscriptionDate < todayKey || (!activeMilkItems.length && selectedDay?.status !== "off")} onClick={() => saveSubscriptionStatus("on")}>ON</button>
-                      <button type="button" className={(selectedDay?.status === "off" ? "active off" : "")} disabled={busy || selectedSubscriptionDate < todayKey} onClick={() => saveSubscriptionStatus("off")}>OFF</button>
+                      <button type="button" className={(selectedDay?.status !== "off" ? "active on" : "")} disabled={busy || selectedSubscriptionDate < todayKey || !selectedDateInSubscription || (!activeMilkItems.length && selectedDay?.status !== "off")} onClick={() => saveSubscriptionStatus("on")}>ON</button>
+                      <button type="button" className={(selectedDay?.status === "off" ? "active off" : "")} disabled={busy || selectedSubscriptionDate < todayKey || !selectedDateInSubscription} onClick={() => saveSubscriptionStatus("off")}>OFF</button>
                     </div>
                     {activeMilkItems.length ? (
                       <div className="subscription-day-items"><strong>Milk on your daily list</strong>{activeMilkItems.map((item) => <span key={item.id}>🥛 {item.product_name} · {item.size} × {item.quantity}</span>)}</div>
