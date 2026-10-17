@@ -142,7 +142,7 @@ function requireCustomer(req, res, next) {
 async function requireActiveCustomerSubscription(req, res, next) {
   try {
     const result = await pool.query(
-      "SELECT id, created_at, created_at + INTERVAL '30 days' AS ends_at FROM customer_orders " +
+      "SELECT id, created_at, items, created_at + INTERVAL '30 days' AS ends_at FROM customer_orders " +
       "WHERE customer_id = $1 AND order_type = 'subscription' AND created_at > NOW() - INTERVAL '30 days' " +
       "ORDER BY created_at DESC, id DESC LIMIT 1",
       [req.customerSession.customerId],
@@ -211,6 +211,41 @@ function productSizeOptions(product) {
     : [{ label: "250 gm", amount: 250 }, { label: "500 gm", amount: 500 }, { label: "1 kg", amount: 1000 }];
 }
 
+function indiaDateKey(value = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
+  const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return values.year + "-" + values.month + "-" + values.day;
+}
+
+function addDaysToDateKey(key, days) {
+  const date = new Date(key + "T00:00:00Z");
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function dateKeyDifference(from, to) {
+  return Math.round((Date.parse(to + "T00:00:00Z") - Date.parse(from + "T00:00:00Z")) / 86400000);
+}
+
+function scheduledQuantity(schedule, deliveryDate) {
+  const offset = dateKeyDifference(schedule.startDate, deliveryDate);
+  if (offset < 0 || offset >= 30) return 0;
+  if (schedule.pattern === "daily") return Number(schedule.day1Quantity) || 0;
+  if (schedule.pattern === "alternate") return offset % 2 === 0 ? Number(schedule.day1Quantity) || 0 : Number(schedule.day2Quantity) || 0;
+  if (schedule.pattern === "weekly") return offset % 7 === 0 ? Number(schedule.day1Quantity) || 0 : 0;
+  return 0;
+}
+
+function scheduledSubscriptionItems(items, deliveryDate) {
+  const deliveries = (Array.isArray(items) ? items : []).flatMap((item) => {
+    if (!item.schedule) return [];
+    const quantity = scheduledQuantity(item.schedule, deliveryDate);
+    if (!quantity) return [];
+    return [{ ...item, quantity, lineTotal: Number(item.unitPrice) * quantity }];
+  });
+  return { items: deliveries, total: deliveries.reduce((sum, item) => sum + Number(item.lineTotal || 0), 0) };
+}
+
 function calculateProductItems(inputItems) {
   if (!Array.isArray(inputItems) || inputItems.length < 1 || inputItems.length > 27) {
     return { error: "Your basket is empty or contains too many product and size combinations." };
@@ -220,7 +255,9 @@ function calculateProductItems(inputItems) {
   for (const item of inputItems) {
     const product = products[item?.productId];
     const quantity = Number(item?.quantity);
+    const purchaseType = item?.purchaseType || "once";
     const size = product && productSizeOptions(product).find((option) => option.label === item?.size);
+    if (!["once", "trial"].includes(purchaseType)) return { error: "Choose a valid purchase type." };
     if (!product || !size) {
       return { error: "A basket item has an invalid product or size. Please review your basket." };
     }
@@ -230,12 +267,53 @@ function calculateProductItems(inputItems) {
     const unitPrice = Math.max(1, Math.round((product.basePrice * size.amount) / product.baseAmount));
     const lineTotal = unitPrice * quantity;
     total += lineTotal;
-    result.push({ name: product.name, size: size.label, quantity, unitPrice, lineTotal });
+    result.push({ name: product.name, size: size.label, quantity, unitPrice, lineTotal, purchaseType });
   }
   return { items: result, total };
 }
 
-function calculateSubscriptionItem(planId) {
+function calculateSubscriptionItem(planId, productSubscription) {
+  if (productSubscription) {
+    const product = products[productSubscription.productId];
+    const size = product && productSizeOptions(product).find((option) => option.label === productSubscription.size);
+    const pattern = productSubscription.deliveryPattern;
+    const startDate = productSubscription.startDate;
+    const today = indiaDateKey();
+    const parsedStart = typeof startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? new Date(startDate + "T00:00:00Z") : null;
+    const day1Quantity = Number(productSubscription.day1Quantity);
+    const day2Quantity = Number(productSubscription.day2Quantity);
+    if (!product || !size) return { error: "Choose a valid product and size for the subscription." };
+    if (!["daily", "alternate", "weekly"].includes(pattern)) return { error: "Choose a valid delivery pattern." };
+    if (!parsedStart || !Number.isFinite(parsedStart.getTime()) || parsedStart.toISOString().slice(0, 10) !== startDate) {
+      return { error: "Choose a valid first delivery date." };
+    }
+    if (startDate < today || startDate > addDaysToDateKey(today, 29)) return { error: "Choose a first delivery date within the next 30 days." };
+    if (!Number.isInteger(day1Quantity) || day1Quantity < 1 || day1Quantity > 99) return { error: "Day 1 quantity must be from 1 to 99." };
+    if (!Number.isInteger(day2Quantity) || day2Quantity < 0 || day2Quantity > 99) return { error: "Day 2 quantity must be from 0 to 99." };
+
+    const unitPrice = Math.max(1, Math.round((product.basePrice * size.amount) / product.baseAmount));
+    const schedule = { pattern, startDate, day1Quantity, day2Quantity: pattern === "alternate" ? day2Quantity : 0, durationDays: 30 };
+    let totalQuantity = 0;
+    let deliveryCount = 0;
+    const endDate = addDaysToDateKey(today, 29);
+    for (let date = startDate; date <= endDate; date = addDaysToDateKey(date, 1)) {
+      const quantity = scheduledQuantity(schedule, date);
+      if (quantity > 0) { totalQuantity += quantity; deliveryCount += 1; }
+    }
+    const total = unitPrice * totalQuantity;
+    return {
+      items: [{
+        name: product.name,
+        size: size.label,
+        quantity: day1Quantity,
+        unitPrice,
+        lineTotal: total,
+        purchaseType: "subscription",
+        schedule: { ...schedule, deliveryCount },
+      }],
+      total,
+    };
+  }
   const plan = subscriptionPlans[planId];
   if (!plan) return { error: "Choose a valid subscription plan." };
   return {
@@ -384,7 +462,8 @@ app.get("/api/account/subscription", requireCustomer, async (req, res) => {
     return res.json({
       active: true,
       id: subscription.id,
-      planName: items[0]?.name || "Active subscription",
+      planName: items.map((item) => item.name).join(", ") || "Active subscription",
+      items,
       totalRupees: subscription.total_rupees,
       startsAt: subscription.created_at,
       endsAt: subscription.ends_at,
@@ -400,7 +479,8 @@ app.get("/api/account/subscription-days", requireCustomer, requireActiveCustomer
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return res.status(400).json({ error: "Choose a valid calendar month." });
   try {
     const indiaToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-    if (month === indiaToday.slice(0, 7)) {
+    const hasProductSchedule = (Array.isArray(req.activeCustomerSubscription.items) ? req.activeCustomerSubscription.items : []).some((item) => item.schedule);
+    if (!hasProductSchedule && month === indiaToday.slice(0, 7)) {
       const milkRows = await pool.query(
         "SELECT product_id, size, quantity FROM customer_daily_orders WHERE customer_id = $1 AND is_active = TRUE AND product_id IN (1, 2) ORDER BY created_at, id",
         [req.customerSession.customerId],
@@ -447,19 +527,30 @@ app.put("/api/account/subscription-days/:date", requireCustomer, requireActiveCu
   const status = req.body?.status;
   if (status !== "on" && status !== "off") return res.status(400).json({ error: "Choose ON or OFF for this delivery day." });
   try {
-    const milkRows = await pool.query(
+    const subscriptionItems = Array.isArray(req.activeCustomerSubscription.items) ? req.activeCustomerSubscription.items : [];
+    const hasProductSchedule = subscriptionItems.some((item) => item.schedule);
+    const milkRows = hasProductSchedule ? { rowCount: 0, rows: [] } : await pool.query(
       "SELECT product_id, product_name, size, quantity FROM customer_daily_orders " +
       "WHERE customer_id = $1 AND is_active = TRUE AND product_id IN (1, 2) ORDER BY created_at, id",
       [req.customerSession.customerId],
     );
     let snapshot = [];
     let total = 0;
+    const scheduledDelivery = hasProductSchedule ? scheduledSubscriptionItems(subscriptionItems, deliveryDate) : null;
+    if (hasProductSchedule && !scheduledDelivery.items.length) {
+      return res.status(400).json({ error: "No delivery is scheduled for this date." });
+    }
     if (status === "on") {
-      if (!milkRows.rowCount) return res.status(400).json({ error: "Add an active milk item in Daily order before scheduling a delivery." });
-      const calculated = calculateProductItems(milkRows.rows.map((item) => ({ productId: Number(item.product_id), size: item.size, quantity: Number(item.quantity) })));
-      if (calculated.error) return res.status(400).json({ error: calculated.error });
-      snapshot = calculated.items;
-      total = calculated.total;
+      if (hasProductSchedule) {
+        snapshot = scheduledDelivery.items;
+        total = scheduledDelivery.total;
+      } else {
+        if (!milkRows.rowCount) return res.status(400).json({ error: "Add an active milk item in Daily order before scheduling a delivery." });
+        const calculated = calculateProductItems(milkRows.rows.map((item) => ({ productId: Number(item.product_id), size: item.size, quantity: Number(item.quantity) })));
+        if (calculated.error) return res.status(400).json({ error: calculated.error });
+        snapshot = calculated.items;
+        total = calculated.total;
+      }
     } else {
       const existing = await pool.query(
         "SELECT items, total_rupees FROM customer_subscription_days WHERE customer_id = $1 AND delivery_date = $2::date",
@@ -468,6 +559,9 @@ app.put("/api/account/subscription-days/:date", requireCustomer, requireActiveCu
       if (existing.rowCount) {
         snapshot = existing.rows[0].items;
         total = existing.rows[0].total_rupees;
+      } else if (hasProductSchedule) {
+        snapshot = scheduledDelivery.items;
+        total = scheduledDelivery.total;
       } else if (milkRows.rowCount) {
         const calculated = calculateProductItems(milkRows.rows.map((item) => ({ productId: Number(item.product_id), size: item.size, quantity: Number(item.quantity) })));
         if (!calculated.error) { snapshot = calculated.items; total = calculated.total; }
@@ -615,7 +709,7 @@ app.post("/api/orders", async (req, res) => {
 
   const orderType = req.body?.orderType;
   const calculated = orderType === "subscription"
-    ? calculateSubscriptionItem(req.body?.planId)
+    ? calculateSubscriptionItem(req.body?.planId, req.body?.productSubscription)
     : orderType === "product"
       ? calculateProductItems(req.body?.items)
       : { error: "Choose a valid order type." };
