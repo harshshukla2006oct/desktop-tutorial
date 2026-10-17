@@ -145,6 +145,7 @@ function App() {
             id: Number(product.id),
           }));
           setProducts(nextProducts);
+          setSelectedProduct((selected) => selected ? (nextProducts.find((product) => product.id === selected.id) || selected) : null);
           const iconByCategory = Object.fromEntries(categoryDefaults.map((category) => [category.name, category.icon]));
           setCategories([{ name: "All products", icon: "✦" }, ...[...new Set(nextProducts.map((product) => product.category))].sort().map((name) => ({ name, icon: iconByCategory[name] || "✦" }))]);
         })
@@ -661,17 +662,17 @@ function App() {
           {visibleProducts.length ? (
             <div className="product-grid" key={activeCategory}>
               {visibleProducts.map((product) => (
-                <article className="product-card" key={product.id}>
+                <article className={"product-card " + (product.inStock === false ? "out-of-stock" : "")} key={product.id}>
                   <div className={`product-cover ${product.color}`}>
                     <span className="cover-sparkle sparkle-one">✦</span><span className="cover-sparkle sparkle-two">✧</span>
                     <div className="brand-stamp"><span>ROYAL HILL</span><small>FARM FRESH</small></div>
                     <div className="product-art" aria-hidden="true">{product.icon}</div>
-                    <div className="cover-caption">{product.tag}</div><span className="cover-seal">✿</span>
+                    <div className="cover-caption">{product.tag}</div><span className="cover-seal">✿</span>{product.inStock === false && <span className="product-stock-ribbon">OUT OF STOCK</span>}
                   </div>
                   <div className="product-info">
                     <div className="product-name-row"><h3>{product.name}</h3><span className="price">₹{product.price}</span></div>
                     <p>{product.detail}</p>
-                    <button className="add-button" onClick={() => openSizePicker(product)}><span>＋</span> Choose size</button>
+                    <button className="add-button" disabled={product.inStock === false} onClick={() => openSizePicker(product)}>{product.inStock === false ? "Currently unavailable" : <><span>＋</span> Choose size</>}</button>
                   </div>
                 </article>
               ))}
@@ -748,7 +749,8 @@ function App() {
                 <small className="purchase-mode-note">Delivery dates and quantities can be managed in your customer account. No online payment is taken.</small>
               </div>
             )}
-            <button className="checkout-primary size-add-button" disabled={purchaseMode === "subscribe" && (!subscriptionStartDate || Number(day1Quantity) < 1 || Number(day1Quantity) > 99 || (deliveryPattern === "alternate" && (Number(day2Quantity) < 0 || Number(day2Quantity) > 99)))} onClick={() => {
+            {selectedProduct.inStock === false && <p className="product-out-of-stock-note">This product is currently out of stock.</p>}
+            <button className="checkout-primary size-add-button" disabled={selectedProduct.inStock === false || (purchaseMode === "subscribe" && !subscriptionStartDate) || (purchaseMode === "subscribe" && (Number(day1Quantity) < 1 || Number(day1Quantity) > 99)) || (purchaseMode === "subscribe" && deliveryPattern === "alternate" && (Number(day2Quantity) < 0 || Number(day2Quantity) > 99))} onClick={() => {
               const size = getProductSizes(selectedProduct).find((option) => option.label === selectedSize);
               if (!size) return;
               if (purchaseMode === "subscribe") beginProductSubscription();
