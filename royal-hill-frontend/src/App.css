@@ -440,3 +440,8 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
  .purchase-mode-picker button,.delivery-pattern-options button { padding: 10px 4px; font-size: 11px; }
  .product-subscription-controls { padding: 12px; }
 }
+
+.product-stock-ribbon { position:absolute; z-index:2; top:14px; right:14px; padding:7px 10px; border:1px solid rgba(173,57,57,.2); border-radius:999px; background:#fff1f0; color:#a23232; font-size:10px; font-weight:800; letter-spacing:.7px; box-shadow:0 4px 12px rgba(70,20,20,.1); }
+.product-card.out-of-stock .product-art { opacity:.45; filter:grayscale(.5); }
+.add-button:disabled { border-color:#d8e0e8; background:#eef2f6; color:#728297; cursor:not-allowed; transform:none; box-shadow:none; }
+.product-out-of-stock-note { margin:10px 0 0; padding:11px 13px; border:1px solid #f1d5d5; border-radius:11px; background:#fff6f5; color:#a23232; font-size:13px; font-weight:700; }
