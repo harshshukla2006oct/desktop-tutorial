@@ -52,20 +52,16 @@ const subscriptionPlans = [
 ];
 
 function getProductSizes(product) {
+  if (Array.isArray(product.packSizes) && product.packSizes.length) {
+    return product.packSizes.map((pack) => ({ label: pack.label, amount: 0, price: Number(pack.price) }));
+  }
   const isMilk = product.category === "Cow Milk" || /milk/i.test(product.name);
   const choices = isMilk
     ? [{ label: "500 ml", amount: 500 }, { label: "1 L", amount: 1000 }, { label: "2 L", amount: 2000 }]
     : [{ label: "250 gm", amount: 250 }, { label: "500 gm", amount: 500 }, { label: "1 kg", amount: 1000 }];
-
   const match = product.detail.match(/(\d+(?:\.\d+)?)\s*(kg|g|ml|l|litre)\b/i);
-  const baseAmount = match
-    ? Number(match[1]) * (/^(kg|l|litre)$/i.test(match[2]) ? 1000 : 1)
-    : 250;
-
-  return choices.map((choice) => ({
-    ...choice,
-    price: Math.max(1, Math.round((product.price * choice.amount) / baseAmount)),
-  }));
+  const baseAmount = match ? Number(match[1]) * (/^(kg|l|litre)$/i.test(match[2]) ? 1000 : 1) : 250;
+  return choices.map((choice) => ({ ...choice, price: Math.max(1, Math.round((product.price * choice.amount) / baseAmount)) }));
 }
 
 function indiaDateKey(date = new Date()) {
@@ -137,23 +133,38 @@ function App() {
 
   useEffect(() => {
     let current = true;
-    fetch("/api/products")
-      .then((response) => response.ok ? response.json() : null)
-      .then((result) => {
-        if (!current || !Array.isArray(result?.products) || !result.products.length) return;
-        const nextProducts = result.products.map((product) => ({
-          ...product,
-          detail: product.detail || product.description || "",
-          price: Number(product.price),
-          id: Number(product.id),
-        }));
-        setProducts(nextProducts);
-        const iconByCategory = Object.fromEntries(categoryDefaults.map((category) => [category.name, category.icon]));
-        setCategories([{ name: "All products", icon: "✦" }, ...[...new Set(nextProducts.map((product) => product.category))].sort().map((name) => ({ name, icon: iconByCategory[name] || "✦" }))]);
-      })
-      .catch(() => {});
-    return () => { current = false; };
+    const loadCatalog = () => {
+      fetch("/api/products", { cache: "no-store" })
+        .then((response) => response.ok ? response.json() : null)
+        .then((result) => {
+          if (!current || !Array.isArray(result?.products)) return;
+          const nextProducts = result.products.map((product) => ({
+            ...product,
+            detail: product.detail || product.description || "",
+            price: Number(product.price),
+            id: Number(product.id),
+          }));
+          setProducts(nextProducts);
+          const iconByCategory = Object.fromEntries(categoryDefaults.map((category) => [category.name, category.icon]));
+          setCategories([{ name: "All products", icon: "✦" }, ...[...new Set(nextProducts.map((product) => product.category))].sort().map((name) => ({ name, icon: iconByCategory[name] || "✦" }))]);
+        })
+        .catch(() => {});
+    };
+    loadCatalog();
+    const refreshTimer = window.setInterval(loadCatalog, 15000);
+    window.addEventListener("focus", loadCatalog);
+    return () => {
+      current = false;
+      window.clearInterval(refreshTimer);
+      window.removeEventListener("focus", loadCatalog);
+    };
   }, []);
+
+  useEffect(() => {
+    if (activeCategory !== "All products" && !products.some((product) => product.category === activeCategory)) {
+      setActiveCategory("All products");
+    }
+  }, [activeCategory, products]);
 
   useEffect(() => {
     let current = true;
@@ -179,7 +190,7 @@ function App() {
     const matchesCategory = activeCategory === "All products" || product.category === activeCategory;
     const matchesSearch = `${product.name} ${product.category} ${product.detail}`.toLowerCase().includes(search.toLowerCase());
     return matchesCategory && matchesSearch;
-  }), [activeCategory, search]);
+  }), [activeCategory, search, products]);
 
   const cartItems = Object.entries(cart).map(([key, item]) => ({
     key,
