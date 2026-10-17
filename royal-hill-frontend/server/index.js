@@ -201,6 +201,7 @@ function productFromRow(row) {
     price: Number(row.price), basePrice: Number(row.price), baseAmount: Number(row.base_amount),
     milk: Boolean(row.is_milk), icon: row.icon, tag: row.tag, color: row.color,
     packSizes: Array.isArray(row.pack_sizes) ? row.pack_sizes : [],
+    inStock: row.in_stock !== false,
   };
   if (!product.packSizes.length) product.packSizes = productSizeOptions(product);
   return product;
@@ -219,6 +220,7 @@ function validateProductInput(input) {
   const category = typeof input.category === "string" ? input.category.trim() : "";
   const detail = typeof input.detail === "string" ? input.detail.trim() : "";
   const packs = Array.isArray(input.packSizes) ? input.packSizes : [];
+  const inStock = typeof input.inStock === "boolean" ? input.inStock : true;
   if (name.length < 2 || name.length > 120) return { error: "Enter a product name between 2 and 120 characters." };
   if (category.length < 2 || category.length > 80) return { error: "Enter a category between 2 and 80 characters." };
   if (detail.length < 3 || detail.length > 500) return { error: "Enter a product description between 3 and 500 characters." };
@@ -240,12 +242,12 @@ function validateProductInput(input) {
   const tag = typeof input.tag === "string" && input.tag.trim() ? input.tag.trim().slice(0, 40) : category.toUpperCase().slice(0, 40);
   const color = category.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30) || "product";
   const isMilk = /^milk$/i.test(category) || /milk/i.test(name);
-  return { product: { name, category, detail, price: packSizes[0].price, packSizes, baseAmount: productBaseAmount(detail), isMilk, icon, tag, color } };
+  return { product: { name, category, detail, price: packSizes[0].price, packSizes, baseAmount: productBaseAmount(detail), isMilk, icon, tag, color, inStock } };
 }
 
 app.get("/api/products", async (_req, res) => {
   try {
-    const result = await pool.query("SELECT id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes FROM product_catalog WHERE is_active = TRUE ORDER BY id");
+    const result = await pool.query("SELECT id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes, in_stock FROM product_catalog WHERE is_active = TRUE ORDER BY id");
     return res.json({ products: result.rows.map(productFromRow) });
   } catch (error) {
     console.error("Product catalog could not be loaded:", error.message);
@@ -258,7 +260,7 @@ app.get("/api/admin/products", requireAdmin, async (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
   try {
     const result = await pool.query(
-      "SELECT id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes FROM product_catalog WHERE is_active = TRUE AND ($1 = '' OR LOWER(category) = LOWER($1)) AND ($2 = '' OR name ILIKE '%' || $2 || '%' OR category ILIKE '%' || $2 || '%' OR description ILIKE '%' || $2 || '%') ORDER BY category, name",
+      "SELECT id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes, in_stock FROM product_catalog WHERE is_active = TRUE AND ($1 = '' OR LOWER(category) = LOWER($1)) AND ($2 = '' OR name ILIKE '%' || $2 || '%' OR category ILIKE '%' || $2 || '%' OR description ILIKE '%' || $2 || '%') ORDER BY category, name",
       [category, search],
     );
     return res.json({ products: result.rows.map(productFromRow) });
@@ -274,8 +276,8 @@ app.post("/api/admin/products", requireAdmin, async (req, res) => {
   const product = validated.product;
   try {
     const result = await pool.query(
-      "INSERT INTO product_catalog (name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb) RETURNING id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes",
-      [product.name, product.category, product.detail, product.price, product.baseAmount, product.isMilk, product.icon, product.tag, product.color, JSON.stringify(product.packSizes)],
+      "INSERT INTO product_catalog (name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes, in_stock) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11) RETURNING id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes, in_stock",
+      [product.name, product.category, product.detail, product.price, product.baseAmount, product.isMilk, product.icon, product.tag, product.color, JSON.stringify(product.packSizes), product.inStock],
     );
     const saved = productFromRow(result.rows[0]);
     products[saved.id] = saved;
@@ -295,8 +297,8 @@ app.put("/api/admin/products/:id", requireAdmin, async (req, res) => {
   const product = validated.product;
   try {
     const result = await pool.query(
-      "UPDATE product_catalog SET name=$2, category=$3, description=$4, price=$5, base_amount=$6, is_milk=$7, icon=$8, tag=$9, color=$10, pack_sizes=$11::jsonb, updated_at=NOW() WHERE id=$1 AND is_active=TRUE RETURNING id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes",
-      [id, product.name, product.category, product.detail, product.price, product.baseAmount, product.isMilk, product.icon, product.tag, product.color, JSON.stringify(product.packSizes)],
+      "UPDATE product_catalog SET name=$2, category=$3, description=$4, price=$5, base_amount=$6, is_milk=$7, icon=$8, tag=$9, color=$10, pack_sizes=$11::jsonb, in_stock=$12, updated_at=NOW() WHERE id=$1 AND is_active=TRUE RETURNING id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes, in_stock",
+      [id, product.name, product.category, product.detail, product.price, product.baseAmount, product.isMilk, product.icon, product.tag, product.color, JSON.stringify(product.packSizes), product.inStock],
     );
     if (!result.rowCount) return res.status(404).json({ error: "That product could not be found." });
     const saved = productFromRow(result.rows[0]);
@@ -306,6 +308,27 @@ app.put("/api/admin/products/:id", requireAdmin, async (req, res) => {
   } catch (error) {
     console.error("Admin could not update product:", error.message);
     return res.status(500).json({ error: "The product could not be updated." });
+  }
+});
+
+app.patch("/api/admin/products/:id/stock", requireAdmin, async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isSafeInteger(id) || id < 1 || typeof req.body?.inStock !== "boolean") {
+    return res.status(400).json({ error: "Choose whether this product is in stock." });
+  }
+  try {
+    const result = await pool.query(
+      "UPDATE product_catalog SET in_stock=$2, updated_at=NOW() WHERE id=$1 AND is_active=TRUE RETURNING id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes, in_stock",
+      [id, req.body.inStock],
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "That product could not be found." });
+    const saved = productFromRow(result.rows[0]);
+    products[id] = saved;
+    await pool.query("INSERT INTO admin_data_logs (action, entity_type, entity_id, details) VALUES ('updated','product',$1,$2::jsonb)", [id, JSON.stringify({ name: saved.name, inStock: saved.inStock })]);
+    return res.json({ product: saved });
+  } catch (error) {
+    console.error("Admin could not update product stock:", error.message);
+    return res.status(500).json({ error: "Stock status could not be updated." });
   }
 });
 
@@ -395,6 +418,7 @@ function calculateProductItems(inputItems) {
     if (!product || !size) {
       return { error: "A basket item has an invalid product or size. Please review your basket." };
     }
+    if (!product.inStock) return { error: product.name + " is currently out of stock. Remove it from your basket to continue." };
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
       return { error: "Each product quantity must be from 1 to 99." };
     }
@@ -417,6 +441,7 @@ function calculateSubscriptionItem(planId, productSubscription) {
     const day1Quantity = Number(productSubscription.day1Quantity);
     const day2Quantity = Number(productSubscription.day2Quantity);
     if (!product || !size) return { error: "Choose a valid product and size for the subscription." };
+    if (!product.inStock) return { error: product.name + " is currently out of stock and cannot be subscribed to right now." };
     if (!["daily", "alternate", "weekly"].includes(pattern)) return { error: "Choose a valid delivery pattern." };
     if (!parsedStart || !Number.isFinite(parsedStart.getTime()) || parsedStart.toISOString().slice(0, 10) !== startDate) {
       return { error: "Choose a valid first delivery date." };
@@ -1216,10 +1241,11 @@ async function start() {
     "id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, name VARCHAR(120) NOT NULL, category VARCHAR(80) NOT NULL, " +
     "description VARCHAR(500) NOT NULL, price INTEGER NOT NULL CHECK (price > 0), base_amount INTEGER NOT NULL CHECK (base_amount > 0), " +
     "is_milk BOOLEAN NOT NULL DEFAULT FALSE, icon VARCHAR(16) NOT NULL DEFAULT '✦', tag VARCHAR(40) NOT NULL DEFAULT '', " +
-    "color VARCHAR(30) NOT NULL DEFAULT 'product', pack_sizes JSONB NOT NULL DEFAULT '[]'::jsonb, is_active BOOLEAN NOT NULL DEFAULT TRUE, " +
+    "color VARCHAR(30) NOT NULL DEFAULT 'product', pack_sizes JSONB NOT NULL DEFAULT '[]'::jsonb, in_stock BOOLEAN NOT NULL DEFAULT TRUE, is_active BOOLEAN NOT NULL DEFAULT TRUE, " +
     "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
   );
   await pool.query("ALTER TABLE product_catalog ADD COLUMN IF NOT EXISTS pack_sizes JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE product_catalog ADD COLUMN IF NOT EXISTS in_stock BOOLEAN NOT NULL DEFAULT TRUE");
   for (const product of defaultProducts) {
     await pool.query(
       "INSERT INTO product_catalog (id,name,category,description,price,base_amount,is_milk,icon,tag,color,pack_sizes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb) ON CONFLICT (id) DO NOTHING",
