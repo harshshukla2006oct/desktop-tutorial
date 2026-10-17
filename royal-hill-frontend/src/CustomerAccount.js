@@ -29,6 +29,28 @@ async function accountRequest(path, options = {}) {
 const getLocalDateKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 const getMonthKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 const getDateFromKey = (key) => { const [year, month, day] = key.split("-").map(Number); return new Date(year, month - 1, day); };
+const addDaysToDateKey = (key, days) => {
+  const date = new Date(key + "T00:00:00Z");
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+const dateKeyDifference = (from, to) => Math.round((Date.parse(to + "T00:00:00Z") - Date.parse(from + "T00:00:00Z")) / 86400000);
+const scheduledQuantityForDate = (schedule, dateKey) => {
+  if (!schedule?.startDate) return 0;
+  const offset = dateKeyDifference(schedule.startDate, dateKey);
+  if (offset < 0 || offset >= 30) return 0;
+  if (schedule.pattern === "daily") return Number(schedule.day1Quantity) || 0;
+  if (schedule.pattern === "alternate") return offset % 2 === 0 ? Number(schedule.day1Quantity) || 0 : Number(schedule.day2Quantity) || 0;
+  if (schedule.pattern === "weekly") return offset % 7 === 0 ? Number(schedule.day1Quantity) || 0 : 0;
+  return 0;
+};
+const scheduledItemsForDate = (subscription, dateKey, fallbackItems) => {
+  const items = (Array.isArray(subscription?.items) ? subscription.items : []).filter((item) => item.schedule)
+    .map((item) => ({ ...item, quantity: scheduledQuantityForDate(item.schedule, dateKey) }))
+    .filter((item) => item.quantity > 0);
+  if (items.length || (Array.isArray(subscription?.items) && subscription.items.some((item) => item.schedule))) return items;
+  return fallbackItems || [];
+};
 const getIndiaDateKey = (value) => {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
   const dateParts = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
@@ -209,7 +231,13 @@ function CustomerAccount({ onBack }) {
 
   const saveSubscriptionStatus = async (status) => {
     if (selectedSubscriptionDate < getLocalDateKey(new Date())) return;
-    if (status === "on" && !dailyOrders.some((entry) => entry.is_active && accountProducts.find((product) => product.id === Number(entry.product_id))?.milk)) {
+    const scheduleConfigured = (Array.isArray(subscriptionStatus?.items) ? subscriptionStatus.items : []).some((item) => item.schedule);
+    const productsForSelectedDate = scheduledItemsForDate(subscriptionStatus, selectedSubscriptionDate, activeMilkItems);
+    if (status === "on" && scheduleConfigured && !productsForSelectedDate.length) {
+      setMessage("This delivery pattern has no products scheduled for the selected day.");
+      return;
+    }
+    if (status === "on" && !scheduleConfigured && !activeMilkItems.length) {
       setMessage("Add an active milk item in Daily order before scheduling a delivery.");
       return;
     }
@@ -219,17 +247,20 @@ function CustomerAccount({ onBack }) {
         method: "PUT", body: JSON.stringify({ status }),
       });
       setSubscriptionDays((entries) => [...entries.filter((entry) => String(entry.delivery_date).slice(0, 10) !== selectedSubscriptionDate), result.entry]);
-      setMessage(status === "on" ? "Milk delivery scheduled for this day." : "Milk delivery cancelled for this day.");
+      setMessage(status === "on" ? "Product delivery scheduled for this day." : "Product delivery cancelled for this day.");
     } catch (error) { setMessage(error.message); }
     finally { setBusy(false); }
   };
 
   const todayKey = getLocalDateKey(new Date());
   const subscriptionStartDate = subscriptionStatus?.startsAt ? getIndiaDateKey(subscriptionStatus.startsAt) : "";
-  const subscriptionEndDate = subscriptionStatus?.endsAt ? getIndiaDateKey(subscriptionStatus.endsAt) : "";
+  const subscriptionEndDate = subscriptionStartDate ? addDaysToDateKey(subscriptionStartDate, 29) : "";
   const selectedDateInSubscription = selectedSubscriptionDate >= subscriptionStartDate && selectedSubscriptionDate <= subscriptionEndDate;
   const selectedDay = subscriptionDays.find((entry) => String(entry.delivery_date).slice(0, 10) === selectedSubscriptionDate);
   const activeMilkItems = dailyOrders.filter((entry) => entry.is_active && accountProducts.find((product) => product.id === Number(entry.product_id))?.milk);
+  const hasConfiguredSchedule = (Array.isArray(subscriptionStatus?.items) ? subscriptionStatus.items : []).some((item) => item.schedule);
+  const selectedDeliveryItems = scheduledItemsForDate(subscriptionStatus, selectedSubscriptionDate, activeMilkItems);
+  const selectedDeliveryEnabled = hasConfiguredSchedule ? selectedDeliveryItems.length > 0 : activeMilkItems.length > 0;
   const calendarStart = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
   const calendarDayCount = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0).getDate();
   const calendarCells = [...Array((calendarStart.getDay() + 6) % 7).fill(null), ...Array.from({ length: calendarDayCount }, (_, index) => new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), index + 1))];
@@ -337,9 +368,9 @@ function CustomerAccount({ onBack }) {
 
             {tab === "Your subscription" && subscriptionStatus?.active && (
               <div className="account-subscription-section">
-                <div className="account-section-heading"><div><h2>{subscriptionStatus.planName || "Your active plan"}</h2><p>30-day subscription · Access expires {new Date(subscriptionStatus.endsAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}. Choose which days you want milk delivered.</p></div></div>
+                <div className="account-section-heading"><div><h2>{subscriptionStatus.planName || "Your active plan"}</h2><p>30-day subscription · Access expires {new Date(subscriptionStatus.endsAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}. Choose which days you want your products delivered.</p></div></div>
 
-                <div className="account-section-heading"><div><h2>Choose your milk delivery days</h2><p>Every day in your 30-day plan is marked ON. Turn a day OFF to cancel that delivery.</p></div></div>
+                <div className="account-section-heading"><div><h2>Choose your delivery days</h2><p>Your selected pattern sets the delivery days. Turn a scheduled day OFF to skip it; days without a delivery stay blank.</p></div></div>
                 <div className="subscription-calendar-layout">
                   <section className="subscription-calendar-card" aria-label="Delivery calendar">
                     <div className="subscription-calendar-heading">
@@ -354,7 +385,8 @@ function CustomerAccount({ onBack }) {
                         const dateKey = getLocalDateKey(date);
                         const savedDay = subscriptionDays.find((entry) => String(entry.delivery_date).slice(0, 10) === dateKey);
                         const isWithinSubscription = dateKey >= subscriptionStartDate && dateKey <= subscriptionEndDate;
-                        const status = isWithinSubscription ? (savedDay?.status === "off" ? "off" : "on") : "";
+                        const scheduledForDate = scheduledItemsForDate(subscriptionStatus, dateKey, activeMilkItems);
+                        const status = isWithinSubscription && (!hasConfiguredSchedule || scheduledForDate.length) ? (savedDay?.status === "off" ? "off" : "on") : "";
                         const isSelected = selectedSubscriptionDate === dateKey;
                         return (
                           <button type="button" key={dateKey} className={"subscription-calendar-day " + (isSelected ? "selected " : "") + (status ? status : "") + (dateKey === todayKey ? " today" : "")} onClick={() => { setSelectedSubscriptionDate(dateKey); setMessage(""); }} aria-label={date.toLocaleDateString(undefined, { dateStyle: "full" }) + (status === "on" ? ", delivery on" : status === "off" ? ", delivery cancelled" : "")}>
@@ -368,14 +400,14 @@ function CustomerAccount({ onBack }) {
                   <section className="subscription-day-card">
                     <p className="eyebrow">DELIVERY PREFERENCE</p>
                     <h3>{getDateFromKey(selectedSubscriptionDate).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</h3>
-                    <p className="subscription-day-caption">{selectedDay?.status === "off" ? "You cancelled milk for this day." : !selectedDateInSubscription ? "This date is outside your 30-day subscription period." : "Milk delivery is ON by default for your subscription."}</p>
-                    <div className="subscription-toggle" role="group" aria-label="Milk delivery for selected day">
-                      <button type="button" className={(selectedDay?.status !== "off" ? "active on" : "")} disabled={busy || selectedSubscriptionDate < todayKey || !selectedDateInSubscription || (!activeMilkItems.length && selectedDay?.status !== "off")} onClick={() => saveSubscriptionStatus("on")}>ON</button>
+                    <p className="subscription-day-caption">{selectedDay?.status === "off" ? "You cancelled delivery for this day." : !selectedDateInSubscription ? "This date is outside your 30-day subscription period." : hasConfiguredSchedule ? (selectedDeliveryEnabled ? "Your scheduled products are set for delivery today." : "No products are scheduled for delivery on this day.") : "Delivery is ON by default for your subscription."}</p>
+                    <div className="subscription-toggle" role="group" aria-label="Product delivery for selected day">
+                      <button type="button" className={(selectedDay?.status !== "off" ? "active on" : "")} disabled={busy || selectedSubscriptionDate < todayKey || !selectedDateInSubscription || (!selectedDeliveryEnabled && selectedDay?.status !== "off")} onClick={() => saveSubscriptionStatus("on")}>ON</button>
                       <button type="button" className={(selectedDay?.status === "off" ? "active off" : "")} disabled={busy || selectedSubscriptionDate < todayKey || !selectedDateInSubscription} onClick={() => saveSubscriptionStatus("off")}>OFF</button>
                     </div>
-                    {activeMilkItems.length ? (
-                      <div className="subscription-day-items"><strong>Milk on your daily list</strong>{activeMilkItems.map((item) => <span key={item.id}>🥛 {item.product_name} · {item.size} × {item.quantity}</span>)}</div>
-                    ) : <p className="subscription-needs-milk">Add an active milk product in Daily order to schedule delivery.</p>}
+                    {selectedDeliveryItems.length ? (
+                      <div className="subscription-day-items"><strong>Products scheduled for this day</strong>{selectedDeliveryItems.map((item, index) => <span key={item.id || index}>🥛 {item.name || item.product_name} · {item.size} × {item.quantity}</span>)}</div>
+                    ) : hasConfiguredSchedule ? <p className="subscription-needs-milk">This day is outside your selected delivery pattern.</p> : <p className="subscription-needs-milk">Add an active milk product in Daily order to schedule delivery.</p>}
                     {selectedSubscriptionDate < todayKey && <small className="subscription-past-note">Past delivery days can’t be changed.</small>}
                   </section>
                 </div>
@@ -425,7 +457,7 @@ function CustomerAccount({ onBack }) {
                               <strong>₹{order.total_rupees}</strong>
                             </div>
                             <p className="account-history-meta">{order.order_type === "subscription" ? "Subscription request" : "Order"} · {String(order.payment_method).toUpperCase()}</p>
-                            <ul>{items.map((item, index) => <li key={index}><span>{item.name} · {item.size} × {item.quantity}</span><strong>₹{item.lineTotal}</strong></li>)}</ul>
+                            <ul>{items.map((item, index) => <li key={index}><span>{item.name} · {item.size} × {item.quantity}{item.purchaseType === "trial" ? " · Trial delivery" : item.schedule ? ` · ${item.schedule.pattern === "alternate" ? "Alternate day" : item.schedule.pattern} subscription` : ""}</span><strong>₹{item.lineTotal}</strong></li>)}</ul>
                             <div className="account-history-delivery"><span>{order.customer_name}</span><span>{order.phone}</span><span>{order.delivery_address}, PIN {order.postal_code}</span></div>
                           </article>
                         );
