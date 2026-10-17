@@ -11,17 +11,18 @@ const customerSessionCookie = "royal_hill_customer";
 const sessionLifetimeSeconds = 8 * 60 * 60;
 const rateBuckets = new Map();
 
-const products = {
-  1: { name: "Fresh Buffalo Milk", basePrice: 68, baseAmount: 1000, milk: true },
-  2: { name: "Fresh Cow Milk", basePrice: 75, baseAmount: 1000, milk: true },
-  3: { name: "Creamy Paneer", basePrice: 110, baseAmount: 200 },
-  4: { name: "Pure Desi Ghee", basePrice: 420, baseAmount: 500 },
-  5: { name: "Kesar Peda", basePrice: 180, baseAmount: 250 },
-  6: { name: "Thick Curd", basePrice: 55, baseAmount: 400 },
-  7: { name: "Malai Paneer", basePrice: 250, baseAmount: 500 },
-  8: { name: "A2 Cow Ghee", basePrice: 250, baseAmount: 250 },
-  9: { name: "Milk Cake", basePrice: 160, baseAmount: 250 },
-};
+const defaultProducts = [
+  { id: 1, name: "Fresh Buffalo Milk", category: "Milk", detail: "Buffalo milk · 1 litre", basePrice: 68, baseAmount: 1000, milk: true, icon: "🥛", tag: "DAILY FRESH", color: "milk" },
+  { id: 2, name: "Fresh Cow Milk", category: "Milk", detail: "Cow milk · 1 litre", basePrice: 75, baseAmount: 1000, milk: true, icon: "🥛", tag: "FRESH COW MILK", color: "milk" },
+  { id: 3, name: "Creamy Paneer", category: "Paneer", detail: "Soft & fresh · 200 g", basePrice: 110, baseAmount: 200, milk: false, icon: "🧀", tag: "MADE TODAY", color: "paneer" },
+  { id: 4, name: "Pure Desi Ghee", category: "Ghee", detail: "Traditional bilona · 500 ml", basePrice: 420, baseAmount: 500, milk: false, icon: "🫙", tag: "PURE & GOLDEN", color: "ghee" },
+  { id: 5, name: "Kesar Peda", category: "Sweets", detail: "A little festive · 250 g", basePrice: 180, baseAmount: 250, milk: false, icon: "🍬", tag: "FRESH SWEETS", color: "sweets" },
+  { id: 6, name: "Thick Curd", category: "Milk", detail: "Creamy homemade · 400 g", basePrice: 55, baseAmount: 400, milk: false, icon: "🥣", tag: "FARM FRESH", color: "curd" },
+  { id: 7, name: "Malai Paneer", category: "Paneer", detail: "Rich & tender · 500 g", basePrice: 250, baseAmount: 500, milk: false, icon: "🧀", tag: "FRESH TODAY", color: "paneer" },
+  { id: 8, name: "A2 Cow Ghee", category: "Ghee", detail: "Small batch · 250 ml", basePrice: 250, baseAmount: 250, milk: false, icon: "🫙", tag: "SMALL BATCH", color: "ghee" },
+  { id: 9, name: "Milk Cake", category: "Sweets", detail: "Slow cooked · 250 g", basePrice: 160, baseAmount: 250, milk: false, icon: "🍮", tag: "HOUSE SPECIAL", color: "sweets" },
+];
+let products = Object.fromEntries(defaultProducts.map((product) => [product.id, product]));
 
 const subscriptionPlans = {
   "daily-milk": { name: "Daily Cow Milk", price: 260, period: "30 days" },
@@ -193,6 +194,119 @@ function requireAdmin(req, res, next) {
   if (readSessionToken(req)) return next();
   return res.status(401).json({ error: "Sign in to view customer entries." });
 }
+
+function productFromRow(row) {
+  return {
+    id: Number(row.id), name: row.name, category: row.category, detail: row.description,
+    price: Number(row.price), basePrice: Number(row.price), baseAmount: Number(row.base_amount),
+    milk: Boolean(row.is_milk), icon: row.icon, tag: row.tag, color: row.color,
+  };
+}
+
+function productBaseAmount(description) {
+  const match = String(description || "").match(/(\d+(?:\.\d+)?)\s*(kg|g|ml|l|litre)\b/i);
+  if (!match) return 250;
+  const amount = Number(match[1]);
+  return Math.max(1, Math.round(amount * (/^(kg|l|litre)$/i.test(match[2]) ? 1000 : 1)));
+}
+
+function validateProductInput(input) {
+  if (!input || typeof input !== "object") return { error: "Product details are required." };
+  const name = typeof input.name === "string" ? input.name.trim() : "";
+  const category = typeof input.category === "string" ? input.category.trim() : "";
+  const detail = typeof input.detail === "string" ? input.detail.trim() : "";
+  const price = Number(input.price);
+  if (name.length < 2 || name.length > 120) return { error: "Enter a product name between 2 and 120 characters." };
+  if (category.length < 2 || category.length > 80) return { error: "Enter a category between 2 and 80 characters." };
+  if (detail.length < 3 || detail.length > 500) return { error: "Enter a product description between 3 and 500 characters." };
+  if (!Number.isInteger(price) || price < 1 || price > 1000000) return { error: "Enter a whole-number price from ₹1 to ₹10,00,000." };
+  const icon = typeof input.icon === "string" && input.icon.trim() ? input.icon.trim().slice(0, 16) : "✦";
+  const tag = typeof input.tag === "string" && input.tag.trim() ? input.tag.trim().slice(0, 40) : category.toUpperCase().slice(0, 40);
+  const color = category.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30) || "product";
+  const isMilk = /^milk$/i.test(category) || /milk/i.test(name);
+  return { product: { name, category, detail, price, baseAmount: productBaseAmount(detail), isMilk, icon, tag, color } };
+}
+
+app.get("/api/products", async (_req, res) => {
+  try {
+    const result = await pool.query("SELECT id, name, category, description, price, base_amount, is_milk, icon, tag, color FROM product_catalog WHERE is_active = TRUE ORDER BY id");
+    return res.json({ products: result.rows.map(productFromRow) });
+  } catch (error) {
+    console.error("Product catalog could not be loaded:", error.message);
+    return res.status(500).json({ error: "The product catalog could not be loaded." });
+  }
+});
+
+app.get("/api/admin/products", requireAdmin, async (req, res) => {
+  const category = typeof req.query.category === "string" ? req.query.category.trim() : "";
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  try {
+    const result = await pool.query(
+      "SELECT id, name, category, description, price, base_amount, is_milk, icon, tag, color FROM product_catalog WHERE is_active = TRUE AND ($1 = '' OR LOWER(category) = LOWER($1)) AND ($2 = '' OR name ILIKE '%' || $2 || '%' OR category ILIKE '%' || $2 || '%' OR description ILIKE '%' || $2 || '%') ORDER BY category, name",
+      [category, search],
+    );
+    return res.json({ products: result.rows.map(productFromRow) });
+  } catch (error) {
+    console.error("Admin product catalog could not be loaded:", error.message);
+    return res.status(500).json({ error: "The product catalog could not be loaded." });
+  }
+});
+
+app.post("/api/admin/products", requireAdmin, async (req, res) => {
+  const validated = validateProductInput(req.body);
+  if (validated.error) return res.status(400).json({ error: validated.error });
+  const product = validated.product;
+  try {
+    const result = await pool.query(
+      "INSERT INTO product_catalog (name, category, description, price, base_amount, is_milk, icon, tag, color) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, name, category, description, price, base_amount, is_milk, icon, tag, color",
+      [product.name, product.category, product.detail, product.price, product.baseAmount, product.isMilk, product.icon, product.tag, product.color],
+    );
+    const saved = productFromRow(result.rows[0]);
+    products[saved.id] = saved;
+    await pool.query("INSERT INTO admin_data_logs (action, entity_type, entity_id, details) VALUES ('created','product',$1,$2::jsonb)", [saved.id, JSON.stringify({ name: saved.name, category: saved.category, price: saved.price })]);
+    return res.status(201).json({ product: saved });
+  } catch (error) {
+    console.error("Admin could not create product:", error.message);
+    return res.status(500).json({ error: "The product could not be created." });
+  }
+});
+
+app.put("/api/admin/products/:id", requireAdmin, async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: "Choose a valid product." });
+  const validated = validateProductInput(req.body);
+  if (validated.error) return res.status(400).json({ error: validated.error });
+  const product = validated.product;
+  try {
+    const result = await pool.query(
+      "UPDATE product_catalog SET name=$2, category=$3, description=$4, price=$5, base_amount=$6, is_milk=$7, icon=$8, tag=$9, color=$10, updated_at=NOW() WHERE id=$1 AND is_active=TRUE RETURNING id, name, category, description, price, base_amount, is_milk, icon, tag, color",
+      [id, product.name, product.category, product.detail, product.price, product.baseAmount, product.isMilk, product.icon, product.tag, product.color],
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "That product could not be found." });
+    const saved = productFromRow(result.rows[0]);
+    products[id] = saved;
+    await pool.query("INSERT INTO admin_data_logs (action, entity_type, entity_id, details) VALUES ('updated','product',$1,$2::jsonb)", [id, JSON.stringify({ name: saved.name, category: saved.category, price: saved.price })]);
+    return res.json({ product: saved });
+  } catch (error) {
+    console.error("Admin could not update product:", error.message);
+    return res.status(500).json({ error: "The product could not be updated." });
+  }
+});
+
+app.delete("/api/admin/products/:id", requireAdmin, async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ error: "Choose a valid product." });
+  try {
+    const result = await pool.query("UPDATE product_catalog SET is_active=FALSE, updated_at=NOW() WHERE id=$1 AND is_active=TRUE RETURNING id, name", [id]);
+    if (!result.rowCount) return res.status(404).json({ error: "That product could not be found." });
+    delete products[id];
+    await pool.query("INSERT INTO admin_data_logs (action, entity_type, entity_id, details) VALUES ('deleted','product',$1,$2::jsonb)", [id, JSON.stringify({ name: result.rows[0].name })]);
+    return res.json({ deleted: true, id });
+  } catch (error) {
+    console.error("Admin could not delete product:", error.message);
+    return res.status(500).json({ error: "The product could not be deleted." });
+  }
+});
 
 function validateCustomer(customer, consent) {
   if (!customer || typeof customer !== "object") return "Customer details are required.";
@@ -1077,6 +1191,23 @@ async function start() {
   await pool.query("CREATE INDEX IF NOT EXISTS customer_orders_recent_idx ON customer_orders (created_at DESC, id DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS customer_orders_account_recent_idx ON customer_orders (customer_id, created_at DESC, id DESC)");
   await pool.query("CREATE INDEX IF NOT EXISTS customer_daily_orders_account_idx ON customer_daily_orders (customer_id, created_at ASC, id ASC)");
+  await pool.query(
+    "CREATE TABLE IF NOT EXISTS product_catalog (" +
+    "id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, name VARCHAR(120) NOT NULL, category VARCHAR(80) NOT NULL, " +
+    "description VARCHAR(500) NOT NULL, price INTEGER NOT NULL CHECK (price > 0), base_amount INTEGER NOT NULL CHECK (base_amount > 0), " +
+    "is_milk BOOLEAN NOT NULL DEFAULT FALSE, icon VARCHAR(16) NOT NULL DEFAULT '✦', tag VARCHAR(40) NOT NULL DEFAULT '', " +
+    "color VARCHAR(30) NOT NULL DEFAULT 'product', is_active BOOLEAN NOT NULL DEFAULT TRUE, " +
+    "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+  );
+  for (const product of defaultProducts) {
+    await pool.query(
+      "INSERT INTO product_catalog (id,name,category,description,price,base_amount,is_milk,icon,tag,color) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO NOTHING",
+      [product.id, product.name, product.category, product.detail, product.basePrice, product.baseAmount, product.milk, product.icon, product.tag, product.color],
+    );
+  }
+  await pool.query("SELECT setval(pg_get_serial_sequence('product_catalog','id'), GREATEST(COALESCE((SELECT MAX(id) FROM product_catalog), 0), 1), EXISTS(SELECT 1 FROM product_catalog))");
+  const catalog = await pool.query("SELECT * FROM product_catalog WHERE is_active=TRUE ORDER BY id");
+  products = Object.fromEntries(catalog.rows.map((row) => { const item = productFromRow(row); return [item.id, item]; }));
   app.listen(port, "0.0.0.0", () => console.log("Royal Hill server listening on port " + port));
 }
 
