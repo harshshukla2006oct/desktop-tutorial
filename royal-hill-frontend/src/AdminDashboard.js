@@ -45,7 +45,7 @@ function AdminDashboard() {
   const [productCategory, setProductCategory] = useState("All categories");
   const [productFormOpen, setProductFormOpen] = useState(false);
   const [editingProductId, setEditingProductId] = useState(null);
-  const [productDraft, setProductDraft] = useState({ name: "", category: "", detail: "", icon: "✦", tag: "", packSizes: [{ label: "1 pack", price: "" }] });
+  const [productDraft, setProductDraft] = useState({ name: "", category: "", detail: "", icon: "✦", tag: "", packSizes: [{ label: "1 pack", price: "" }], inStock: true });
   const [productSaving, setProductSaving] = useState(false);
   const [productError, setProductError] = useState("");
   const [entries, setEntries] = useState([]);
@@ -229,14 +229,14 @@ function AdminDashboard() {
 
   const startCreateProduct = () => {
     setEditingProductId(null);
-    setProductDraft({ name: "", category: "", detail: "", icon: "✦", tag: "", packSizes: [{ label: "1 pack", price: "" }] });
+    setProductDraft({ name: "", category: "", detail: "", icon: "✦", tag: "", packSizes: [{ label: "1 pack", price: "" }], inStock: true });
     setProductError("");
     setProductFormOpen(true);
   };
 
   const startEditProduct = (product) => {
     setEditingProductId(product.id);
-    setProductDraft({ name: product.name, category: product.category, detail: product.detail, icon: product.icon || "✦", tag: product.tag || "", packSizes: (product.packSizes || []).map((pack) => ({ label: pack.label, price: String(pack.price) })) });
+    setProductDraft({ name: product.name, category: product.category, detail: product.detail, icon: product.icon || "✦", tag: product.tag || "", packSizes: (product.packSizes || []).map((pack) => ({ label: pack.label, price: String(pack.price) })), inStock: product.inStock !== false });
     setProductError("");
     setProductFormOpen(true);
   };
@@ -264,7 +264,7 @@ function AdminDashboard() {
       const response = await fetch(editingProductId ? "/api/admin/products/" + editingProductId : "/api/admin/products", {
         method: editingProductId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...productDraft, price: Number(productDraft.packSizes[0]?.price), packSizes: productDraft.packSizes.map((pack) => ({ label: pack.label, price: Number(pack.price) })) }),
+        body: JSON.stringify({ ...productDraft, price: Number(productDraft.packSizes[0]?.price), packSizes: productDraft.packSizes.map((pack) => ({ label: pack.label, price: Number(pack.price) })), inStock: productDraft.inStock }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "The product could not be saved.");
@@ -275,6 +275,27 @@ function AdminDashboard() {
       setProductError(saveError.message || "The product could not be saved.");
     } finally {
       setProductSaving(false);
+    }
+  };
+
+  const toggleProductStock = async (product) => {
+    const inStock = product.inStock === false;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/admin/products/" + product.id + "/stock", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inStock }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "The stock status could not be updated.");
+      setCatalogProducts((items) => items.map((item) => item.id === product.id ? result.product : item));
+      await loadDataLogs(0);
+    } catch (stockError) {
+      setError(stockError.message || "The stock status could not be updated.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -532,11 +553,13 @@ function AdminDashboard() {
                     <div className={"admin-product-symbol " + (product.color || "product")}>{product.icon || "✦"}</div>
                     <div className="admin-product-content">
                       <div className="admin-product-card-heading"><span>{product.category}</span><b>₹{product.price}</b></div>
+                      <span className={"admin-stock-badge " + (product.inStock === false ? "out" : "in")}>{product.inStock === false ? "Out of stock" : "In stock"}</span>
                       <h2>{product.name}</h2>
                       <p>{product.detail}</p>
                       {product.tag && <small>{product.tag}</small>}
                     </div>
                     <div className="admin-product-actions">
+                      <button type="button" className={"stock-toggle " + (product.inStock === false ? "restock" : "mark-out")} onClick={() => toggleProductStock(product)} disabled={loading}>{product.inStock === false ? "Mark in stock" : "Mark out of stock"}</button>
                       <button type="button" onClick={() => startEditProduct(product)}>Edit product</button>
                       <button type="button" className="danger" onClick={() => deleteProduct(product)} disabled={loading}>Delete</button>
                     </div>
@@ -742,6 +765,10 @@ function AdminDashboard() {
                       <label className="wide-field">Description and pack information<input maxLength="500" value={productDraft.detail} onChange={(event) => setProductDraft({ ...productDraft, detail: event.target.value })} required placeholder="e.g. Fresh and creamy · 500 g" /></label>
                       <label>Product icon<input maxLength="16" value={productDraft.icon} onChange={(event) => setProductDraft({ ...productDraft, icon: event.target.value })} placeholder="🥛" /></label>
                       <label>Short label<input maxLength="40" value={productDraft.tag} onChange={(event) => setProductDraft({ ...productDraft, tag: event.target.value })} placeholder="FARM FRESH" /></label>
+                      <label className="admin-stock-checkbox">
+                        <input type="checkbox" checked={productDraft.inStock} onChange={(event) => setProductDraft({ ...productDraft, inStock: event.target.checked })} />
+                        <span><strong>Available for purchase</strong><small>Turn this off to mark the product out of stock.</small></span>
+                      </label>
                     </div>
                   </section>
                   <section className="admin-pack-editor">
