@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import "./App.css";
 import CustomerAccount from "./CustomerAccount";
 
-const products = [
+const defaultProducts = [
   { id: 1, name: "Fresh Buffalo Milk", category: "Milk", detail: "Buffalo milk · 1 litre", price: 68, icon: "🥛", tag: "DAILY FRESH", color: "milk" },
   { id: 2, name: "Fresh Cow Milk", category: "Milk", detail: "Cow milk · 1 litre", price: 75, icon: "🥛", tag: "FRESH COW MILK", color: "milk" },
   { id: 3, name: "Creamy Paneer", category: "Paneer", detail: "Soft & fresh · 200 g", price: 110, icon: "🧀", tag: "MADE TODAY", color: "paneer" },
@@ -14,7 +14,7 @@ const products = [
   { id: 9, name: "Milk Cake", category: "Sweets", detail: "Slow cooked · 250 g", price: 160, icon: "🍮", tag: "HOUSE SPECIAL", color: "sweets" },
 ];
 
-const categories = [
+const categoryDefaults = [
   { name: "All products", icon: "✦" },
   { name: "Milk", icon: "🥛" },
   { name: "Paneer", icon: "🧀" },
@@ -99,6 +99,8 @@ function estimateProductSubscription(product, sizeLabel, pattern, startDate, day
 }
 
 function App() {
+  const [products, setProducts] = useState(defaultProducts);
+  const [categories, setCategories] = useState(categoryDefaults);
   const [activeCategory, setActiveCategory] = useState("All products");
   const [search, setSearch] = useState("");
   const [cart, setCart] = useState({});
@@ -132,6 +134,26 @@ function App() {
   const [day2Quantity, setDay2Quantity] = useState(0);
   const [showAccount, setShowAccount] = useState(() => window.location.pathname === "/customer" || new URLSearchParams(window.location.search).get("account") === "1");
   const [accountProfile, setAccountProfile] = useState(null);
+
+  useEffect(() => {
+    let current = true;
+    fetch("/api/products")
+      .then((response) => response.ok ? response.json() : null)
+      .then((result) => {
+        if (!current || !Array.isArray(result?.products) || !result.products.length) return;
+        const nextProducts = result.products.map((product) => ({
+          ...product,
+          detail: product.detail || product.description || "",
+          price: Number(product.price),
+          id: Number(product.id),
+        }));
+        setProducts(nextProducts);
+        const iconByCategory = Object.fromEntries(categoryDefaults.map((category) => [category.name, category.icon]));
+        setCategories([{ name: "All products", icon: "✦" }, ...[...new Set(nextProducts.map((product) => product.category))].sort().map((name) => ({ name, icon: iconByCategory[name] || "✦" }))]);
+      })
+      .catch(() => {});
+    return () => { current = false; };
+  }, []);
 
   useEffect(() => {
     let current = true;
