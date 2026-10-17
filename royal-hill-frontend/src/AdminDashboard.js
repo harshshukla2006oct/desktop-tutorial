@@ -18,7 +18,10 @@ const adminPlans = [
   { id: "fresh-plus", name: "Fresh Plus" },
 ];
 const paymentMethods = ["upi", "card", "emi", "netbanking", "cod"];
-const sizesForProduct = (productId) => [1, 2].includes(Number(productId)) ? ["500 ml", "1 L", "2 L"] : ["250 gm", "500 gm", "1 kg"];
+const sizesForProduct = (productId, catalog = adminProducts) => {
+  const product = catalog.find((candidate) => Number(candidate.id) === Number(productId));
+  return product?.milk || product?.is_milk || [1, 2].includes(Number(productId)) ? ["500 ml", "1 L", "2 L"] : ["250 gm", "500 gm", "1 kg"];
+};
 const emptyOrderDraft = () => ({
   customerName: "", phone: "", address: "", pin: "",
   orderType: "product", paymentMethod: "cod", consent: false,
@@ -37,6 +40,14 @@ function AdminDashboard() {
   const [authState, setAuthState] = useState("checking");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [catalogProducts, setCatalogProducts] = useState(adminProducts);
+  const [productSearch, setProductSearch] = useState("");
+  const [productCategory, setProductCategory] = useState("All categories");
+  const [productFormOpen, setProductFormOpen] = useState(false);
+  const [editingProductId, setEditingProductId] = useState(null);
+  const [productDraft, setProductDraft] = useState({ name: "", category: "", detail: "", price: "", icon: "✦", tag: "" });
+  const [productSaving, setProductSaving] = useState(false);
+  const [productError, setProductError] = useState("");
   const [entries, setEntries] = useState([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -96,6 +107,21 @@ function AdminDashboard() {
     }
   }, []);
 
+  const loadProducts = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/admin/products");
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not load products.");
+      setCatalogProducts(result.products || []);
+    } catch (loadError) {
+      setError(loadError.message || "Could not load products.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const loadDataLogs = useCallback(async (nextOffset = 0) => {
     setLoading(true);
     setError("");
@@ -114,8 +140,8 @@ function AdminDashboard() {
   }, []);
 
   const refreshDashboard = useCallback(
-    () => Promise.all([loadEntries(0), loadLoginCustomers(0), loadDataLogs(0)]),
-    [loadEntries, loadLoginCustomers, loadDataLogs],
+    () => Promise.all([loadEntries(0), loadLoginCustomers(0), loadDataLogs(0), loadProducts()]),
+    [loadEntries, loadLoginCustomers, loadDataLogs, loadProducts],
   );
 
   useEffect(() => {
@@ -177,9 +203,9 @@ function AdminDashboard() {
     const firstItem = entry.items?.[0];
     const plan = adminPlans.find((candidate) => candidate.name === firstItem?.name);
     const items = (entry.items || []).map((item) => {
-      const product = adminProducts.find((candidate) => candidate.name === item.name);
+      const product = catalogProducts.find((candidate) => candidate.name === item.name);
       const productId = product?.id || 1;
-      const sizes = sizesForProduct(productId);
+      const sizes = sizesForProduct(productId, catalogProducts);
       return {
         productId: String(productId),
         size: sizes.includes(item.size) ? item.size : sizes[0],
@@ -200,6 +226,65 @@ function AdminDashboard() {
     setOrderError("");
     setOrderFormOpen(true);
   };
+
+  const startCreateProduct = () => {
+    setEditingProductId(null);
+    setProductDraft({ name: "", category: "", detail: "", price: "", icon: "✦", tag: "" });
+    setProductError("");
+    setProductFormOpen(true);
+  };
+
+  const startEditProduct = (product) => {
+    setEditingProductId(product.id);
+    setProductDraft({ name: product.name, category: product.category, detail: product.detail, price: String(product.price), icon: product.icon || "✦", tag: product.tag || "" });
+    setProductError("");
+    setProductFormOpen(true);
+  };
+
+  const saveProduct = async (event) => {
+    event.preventDefault();
+    setProductSaving(true);
+    setProductError("");
+    try {
+      const response = await fetch(editingProductId ? "/api/admin/products/" + editingProductId : "/api/admin/products", {
+        method: editingProductId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...productDraft, price: Number(productDraft.price) }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "The product could not be saved.");
+      setProductFormOpen(false);
+      await loadProducts();
+      await loadDataLogs(0);
+    } catch (saveError) {
+      setProductError(saveError.message || "The product could not be saved.");
+    } finally {
+      setProductSaving(false);
+    }
+  };
+
+  const deleteProduct = async (product) => {
+    if (!window.confirm("Delete “" + product.name + "” from the shop? It will be removed from the storefront.")) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/admin/products/" + product.id, { method: "DELETE" });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "The product could not be deleted.");
+      await loadProducts();
+      await loadDataLogs(0);
+    } catch (deleteError) {
+      setError(deleteError.message || "The product could not be deleted.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const productCategories = [...new Set(catalogProducts.map((product) => product.category))].sort();
+  const filteredAdminProducts = catalogProducts.filter((product) =>
+    (productCategory === "All categories" || product.category === productCategory) &&
+    (product.name + " " + product.category + " " + product.detail).toLowerCase().includes(productSearch.toLowerCase())
+  );
 
   const saveOrder = async (event) => {
     event.preventDefault();
@@ -309,26 +394,31 @@ function AdminDashboard() {
       <section className="admin-content">
         <nav className="admin-section-tabs" aria-label="Admin dashboard sections">
           <button type="button" className={activeSection === "orders" ? "active" : ""} onClick={() => setActiveSection("orders")}>Orders</button>
+          <button type="button" className={activeSection === "products" ? "active" : ""} onClick={() => setActiveSection("products")}>Products</button>
           <button type="button" className={activeSection === "signins" ? "active" : ""} onClick={() => setActiveSection("signins")}>Customer Sign-ins</button>
           <button type="button" className={activeSection === "logs" ? "active" : ""} onClick={() => setActiveSection("logs")}>Data Logs</button>
         </nav>
 
         <div className="admin-heading-row">
           <div>
-            <p className="admin-eyebrow">{activeSection === "orders" ? "CUSTOMER REQUESTS" : activeSection === "signins" ? "ACCOUNT ACTIVITY" : "ADMIN ACTIVITY"}</p>
-            <h1>{activeSection === "orders" ? "Order dashboard" : activeSection === "signins" ? "Customer Sign-ins" : "Data Logs"}</h1>
+            <p className="admin-eyebrow">{activeSection === "orders" ? "CUSTOMER REQUESTS" : activeSection === "products" ? "SHOP CATALOG" : activeSection === "signins" ? "ACCOUNT ACTIVITY" : "ADMIN ACTIVITY"}</p>
+            <h1>{activeSection === "orders" ? "Order dashboard" : activeSection === "products" ? "Product management" : activeSection === "signins" ? "Customer Sign-ins" : "Data Logs"}</h1>
             <p className="admin-intro">
               {activeSection === "orders"
                 ? "Create, edit, archive, and restore customer orders."
-                : activeSection === "signins"
-                  ? "See account names and successful sign-ins recorded from this update onward."
-                  : "Review order records created, edited, deleted, or restored by an admin."}
+                : activeSection === "products"
+                  ? "Create, update, or remove products and publish changes directly to the storefront."
+                  : activeSection === "signins"
+                    ? "See account names and successful sign-ins recorded from this update onward."
+                    : "Review product and order changes made by an admin."}
             </p>
           </div>
           <div className="admin-heading-actions">
             {activeSection === "orders" && <button className="admin-primary admin-create-order" type="button" onClick={startCreateOrder}>＋ Create order</button>}
+            {activeSection === "products" && <button className="admin-primary" type="button" onClick={startCreateProduct}>＋ Add product</button>}
             <button className="admin-refresh" type="button" onClick={() => {
               if (activeSection === "orders") loadEntries(0);
+              else if (activeSection === "products") loadProducts();
               else if (activeSection === "signins") loadLoginCustomers(0);
               else loadDataLogs(0);
             }} disabled={loading}>
@@ -405,6 +495,43 @@ function AdminDashboard() {
           </>
         )}
 
+        {activeSection === "products" && (
+          <section className="admin-products-section">
+            <div className="admin-products-tools">
+              <label className="admin-product-search">
+                <span aria-hidden="true">⌕</span>
+                <input type="search" placeholder="Search products, details, or categories" value={productSearch} onChange={(event) => setProductSearch(event.target.value)} aria-label="Search products" />
+              </label>
+              <label className="admin-category-filter">Category
+                <select value={productCategory} onChange={(event) => setProductCategory(event.target.value)}>
+                  <option>All categories</option>
+                  {productCategories.map((category) => <option key={category}>{category}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="admin-count">{filteredAdminProducts.length} {filteredAdminProducts.length === 1 ? "product" : "products"} shown</div>
+            {filteredAdminProducts.length ? (
+              <div className="admin-product-grid">
+                {filteredAdminProducts.map((product) => (
+                  <article className="admin-product-card" key={product.id}>
+                    <div className={"admin-product-symbol " + (product.color || "product")}>{product.icon || "✦"}</div>
+                    <div className="admin-product-content">
+                      <div className="admin-product-card-heading"><span>{product.category}</span><b>₹{product.price}</b></div>
+                      <h2>{product.name}</h2>
+                      <p>{product.detail}</p>
+                      {product.tag && <small>{product.tag}</small>}
+                    </div>
+                    <div className="admin-product-actions">
+                      <button type="button" onClick={() => startEditProduct(product)}>Edit product</button>
+                      <button type="button" className="danger" onClick={() => deleteProduct(product)} disabled={loading}>Delete</button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : <section className="admin-empty"><span>✦</span><h2>No products match</h2><p>Try another name or category, or add a new product.</p></section>}
+          </section>
+        )}
+
         {activeSection === "signins" && (
           <section className="admin-login-activity">
             <div className="admin-login-stats">
@@ -467,7 +594,7 @@ function AdminDashboard() {
               <section className="admin-empty">
                 <span>⌁</span>
                 <h2>No data logs yet</h2>
-                <p>Order changes made by an admin will be recorded here.</p>
+                <p>Product and order changes made by an admin will be recorded here.</p>
               </section>
             ) : (
               <div className="admin-log-list">
@@ -475,17 +602,19 @@ function AdminDashboard() {
                   <article className="admin-log-entry" key={log.id}>
                     <div className="admin-log-heading">
                       <span className={"admin-log-action " + log.action}>{log.action}</span>
-                      <strong>Order #{log.entity_id}</strong>
+                      <strong>{log.entity_type === "product" ? "Product" : "Order"} #{log.entity_id}</strong>
                       <time dateTime={log.created_at}>{formatDate(log.created_at)}</time>
                     </div>
                     <p>
-                      {log.action === "updated"
-                        ? "Changed: " + ((log.details?.changedFields || []).join(", ") || "No field changes") + " · Total ₹" + log.details?.previousTotal + " → ₹" + log.details?.newTotal
-                        : log.action === "created"
-                          ? (log.details?.orderType === "subscription" ? "Subscription order" : "Shop order") + " created · Total ₹" + log.details?.total
-                          : log.action === "deleted"
-                            ? "Order moved to deleted status; customer history is retained."
-                            : "Order restored to the active order list."}
+                      {log.entity_type === "product"
+                        ? (log.action === "deleted" ? "Product removed from the storefront." : log.action === "created" ? "Product added: " : "Product updated: ") + (log.details?.name || "")
+                        : log.action === "updated"
+                          ? "Changed: " + ((log.details?.changedFields || []).join(", ") || "No field changes") + " · Total ₹" + log.details?.previousTotal + " → ₹" + log.details?.newTotal
+                          : log.action === "created"
+                            ? (log.details?.orderType === "subscription" ? "Subscription order" : "Shop order") + " created · Total ₹" + log.details?.total
+                            : log.action === "deleted"
+                              ? "Order moved to deleted status; customer history is retained."
+                              : "Order restored to the active order list."}
                     </p>
                   </article>
                 ))}
@@ -540,15 +669,15 @@ function AdminDashboard() {
                     <div className="admin-form-items full-field">
                       <div className="admin-form-items-heading"><strong>Order items</strong><button type="button" onClick={() => setOrderDraft({ ...orderDraft, items: [...orderDraft.items, { productId: "1", size: "1 L", quantity: 1 }] })}>＋ Add item</button></div>
                       {orderDraft.items.map((item, index) => {
-                        const sizes = sizesForProduct(item.productId);
+                        const sizes = sizesForProduct(item.productId, catalogProducts);
                         return (
                           <div className="admin-order-item-row" key={index}>
                             <select aria-label={"Product " + (index + 1)} value={item.productId} onChange={(event) => {
                               const nextId = event.target.value;
-                              const nextItems = orderDraft.items.map((row, rowIndex) => rowIndex === index ? { ...row, productId: nextId, size: sizesForProduct(nextId)[0] } : row);
+                              const nextItems = orderDraft.items.map((row, rowIndex) => rowIndex === index ? { ...row, productId: nextId, size: sizesForProduct(nextId, catalogProducts)[0] } : row);
                               setOrderDraft({ ...orderDraft, items: nextItems });
                             }}>
-                              {adminProducts.map((product) => <option value={product.id} key={product.id}>{product.name}</option>)}
+                              {catalogProducts.map((product) => <option value={product.id} key={product.id}>{product.name}</option>)}
                             </select>
                             <select aria-label={"Size " + (index + 1)} value={item.size} onChange={(event) => setOrderDraft({ ...orderDraft, items: orderDraft.items.map((row, rowIndex) => rowIndex === index ? { ...row, size: event.target.value } : row) })}>
                               {sizes.map((size) => <option value={size} key={size}>{size}</option>)}
@@ -579,6 +708,34 @@ function AdminDashboard() {
             </section>
           </div>
         )}
+        {productFormOpen && (
+          <div className="admin-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setProductFormOpen(false); }}>
+            <section className="admin-modal admin-product-modal" role="dialog" aria-modal="true" aria-labelledby="admin-product-form-title">
+              <div className="admin-modal-heading">
+                <div><p className="admin-eyebrow">SHOP CATALOG</p><h2 id="admin-product-form-title">{editingProductId ? "Edit product" : "Create product"}</h2></div>
+                <button type="button" aria-label="Close product form" onClick={() => setProductFormOpen(false)}>×</button>
+              </div>
+              <p className="admin-intro">Changes save to your shop catalog and appear on the storefront.</p>
+              <form onSubmit={saveProduct}>
+                <div className="admin-product-form-grid">
+                  <label>Product name<input maxLength="120" value={productDraft.name} onChange={(event) => setProductDraft({ ...productDraft, name: event.target.value })} required placeholder="e.g. Farm fresh yogurt" /></label>
+                  <label>Category<input maxLength="80" list="admin-product-categories" value={productDraft.category} onChange={(event) => setProductDraft({ ...productDraft, category: event.target.value })} required placeholder="Choose or enter a category" /></label>
+                  <datalist id="admin-product-categories">{productCategories.map((category) => <option key={category} value={category} />)}</datalist>
+                  <label>Price (₹)<input type="number" min="1" max="1000000" step="1" value={productDraft.price} onChange={(event) => setProductDraft({ ...productDraft, price: event.target.value })} required placeholder="e.g. 120" /></label>
+                  <label>Pack size / description<input maxLength="500" value={productDraft.detail} onChange={(event) => setProductDraft({ ...productDraft, detail: event.target.value })} required placeholder="e.g. Fresh and creamy · 500 g" /></label>
+                  <label>Product icon (optional)<input maxLength="16" value={productDraft.icon} onChange={(event) => setProductDraft({ ...productDraft, icon: event.target.value })} placeholder="🥛" /></label>
+                  <label>Short label (optional)<input maxLength="40" value={productDraft.tag} onChange={(event) => setProductDraft({ ...productDraft, tag: event.target.value })} placeholder="FARM FRESH" /></label>
+                </div>
+                {productError && <p className="admin-error" role="alert">{productError}</p>}
+                <div className="admin-modal-actions">
+                  <button type="button" onClick={() => setProductFormOpen(false)}>Cancel</button>
+                  <button className="admin-primary" type="submit" disabled={productSaving}>{productSaving ? "Saving…" : editingProductId ? "Save product" : "Create product"}</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        )}
+
         <p className="admin-privacy-note">All customer and order management actions are restricted to admin sign-in.</p>
       </section>
     </main>
