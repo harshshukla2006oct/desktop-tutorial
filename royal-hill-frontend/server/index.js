@@ -196,11 +196,14 @@ function requireAdmin(req, res, next) {
 }
 
 function productFromRow(row) {
-  return {
+  const product = {
     id: Number(row.id), name: row.name, category: row.category, detail: row.description,
     price: Number(row.price), basePrice: Number(row.price), baseAmount: Number(row.base_amount),
     milk: Boolean(row.is_milk), icon: row.icon, tag: row.tag, color: row.color,
+    packSizes: Array.isArray(row.pack_sizes) ? row.pack_sizes : [],
   };
+  if (!product.packSizes.length) product.packSizes = productSizeOptions(product);
+  return product;
 }
 
 function productBaseAmount(description) {
@@ -215,21 +218,34 @@ function validateProductInput(input) {
   const name = typeof input.name === "string" ? input.name.trim() : "";
   const category = typeof input.category === "string" ? input.category.trim() : "";
   const detail = typeof input.detail === "string" ? input.detail.trim() : "";
-  const price = Number(input.price);
+  const packs = Array.isArray(input.packSizes) ? input.packSizes : [];
   if (name.length < 2 || name.length > 120) return { error: "Enter a product name between 2 and 120 characters." };
   if (category.length < 2 || category.length > 80) return { error: "Enter a category between 2 and 80 characters." };
   if (detail.length < 3 || detail.length > 500) return { error: "Enter a product description between 3 and 500 characters." };
-  if (!Number.isInteger(price) || price < 1 || price > 1000000) return { error: "Enter a whole-number price from ₹1 to ₹10,00,000." };
+  if (packs.length < 1 || packs.length > 12) return { error: "Add between 1 and 12 pack sizes." };
+  const packSizes = [];
+  const labels = new Set();
+  for (const pack of packs) {
+    const label = typeof pack?.label === "string" ? pack.label.trim() : "";
+    const price = Number(pack?.price);
+    if (label.length < 1 || label.length > 32) return { error: "Each pack needs a name, such as 500 ml or 1 kg." };
+    if (labels.has(label.toLowerCase())) return { error: "Each pack size must have a unique name." };
+    if (!Number.isInteger(price) || price < 1 || price > 1000000) return { error: "Enter a whole-number price from ₹1 to ₹10,00,000 for every pack." };
+    labels.add(label.toLowerCase());
+    packSizes.push({ label, price });
+  }
+  const price = Number(input.price) || packSizes[0].price;
+  if (!Number.isInteger(price) || price < 1 || price > 1000000) return { error: "Enter a valid starting pack price." };
   const icon = typeof input.icon === "string" && input.icon.trim() ? input.icon.trim().slice(0, 16) : "✦";
   const tag = typeof input.tag === "string" && input.tag.trim() ? input.tag.trim().slice(0, 40) : category.toUpperCase().slice(0, 40);
   const color = category.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30) || "product";
   const isMilk = /^milk$/i.test(category) || /milk/i.test(name);
-  return { product: { name, category, detail, price, baseAmount: productBaseAmount(detail), isMilk, icon, tag, color } };
+  return { product: { name, category, detail, price: packSizes[0].price, packSizes, baseAmount: productBaseAmount(detail), isMilk, icon, tag, color } };
 }
 
 app.get("/api/products", async (_req, res) => {
   try {
-    const result = await pool.query("SELECT id, name, category, description, price, base_amount, is_milk, icon, tag, color FROM product_catalog WHERE is_active = TRUE ORDER BY id");
+    const result = await pool.query("SELECT id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes FROM product_catalog WHERE is_active = TRUE ORDER BY id");
     return res.json({ products: result.rows.map(productFromRow) });
   } catch (error) {
     console.error("Product catalog could not be loaded:", error.message);
@@ -242,7 +258,7 @@ app.get("/api/admin/products", requireAdmin, async (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
   try {
     const result = await pool.query(
-      "SELECT id, name, category, description, price, base_amount, is_milk, icon, tag, color FROM product_catalog WHERE is_active = TRUE AND ($1 = '' OR LOWER(category) = LOWER($1)) AND ($2 = '' OR name ILIKE '%' || $2 || '%' OR category ILIKE '%' || $2 || '%' OR description ILIKE '%' || $2 || '%') ORDER BY category, name",
+      "SELECT id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes FROM product_catalog WHERE is_active = TRUE AND ($1 = '' OR LOWER(category) = LOWER($1)) AND ($2 = '' OR name ILIKE '%' || $2 || '%' OR category ILIKE '%' || $2 || '%' OR description ILIKE '%' || $2 || '%') ORDER BY category, name",
       [category, search],
     );
     return res.json({ products: result.rows.map(productFromRow) });
@@ -258,8 +274,8 @@ app.post("/api/admin/products", requireAdmin, async (req, res) => {
   const product = validated.product;
   try {
     const result = await pool.query(
-      "INSERT INTO product_catalog (name, category, description, price, base_amount, is_milk, icon, tag, color) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id, name, category, description, price, base_amount, is_milk, icon, tag, color",
-      [product.name, product.category, product.detail, product.price, product.baseAmount, product.isMilk, product.icon, product.tag, product.color],
+      "INSERT INTO product_catalog (name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb) RETURNING id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes",
+      [product.name, product.category, product.detail, product.price, product.baseAmount, product.isMilk, product.icon, product.tag, product.color, JSON.stringify(product.packSizes)],
     );
     const saved = productFromRow(result.rows[0]);
     products[saved.id] = saved;
@@ -279,8 +295,8 @@ app.put("/api/admin/products/:id", requireAdmin, async (req, res) => {
   const product = validated.product;
   try {
     const result = await pool.query(
-      "UPDATE product_catalog SET name=$2, category=$3, description=$4, price=$5, base_amount=$6, is_milk=$7, icon=$8, tag=$9, color=$10, updated_at=NOW() WHERE id=$1 AND is_active=TRUE RETURNING id, name, category, description, price, base_amount, is_milk, icon, tag, color",
-      [id, product.name, product.category, product.detail, product.price, product.baseAmount, product.isMilk, product.icon, product.tag, product.color],
+      "UPDATE product_catalog SET name=$2, category=$3, description=$4, price=$5, base_amount=$6, is_milk=$7, icon=$8, tag=$9, color=$10, pack_sizes=$11::jsonb, updated_at=NOW() WHERE id=$1 AND is_active=TRUE RETURNING id, name, category, description, price, base_amount, is_milk, icon, tag, color, pack_sizes",
+      [id, product.name, product.category, product.detail, product.price, product.baseAmount, product.isMilk, product.icon, product.tag, product.color, JSON.stringify(product.packSizes)],
     );
     if (!result.rowCount) return res.status(404).json({ error: "That product could not be found." });
     const saved = productFromRow(result.rows[0]);
@@ -320,9 +336,13 @@ function validateCustomer(customer, consent) {
 }
 
 function productSizeOptions(product) {
-  return product.milk
+  if (Array.isArray(product.packSizes) && product.packSizes.length) {
+    return product.packSizes.map((pack) => ({ label: pack.label, price: Number(pack.price), amount: 0 }));
+  }
+  const choices = product.milk
     ? [{ label: "500 ml", amount: 500 }, { label: "1 L", amount: 1000 }, { label: "2 L", amount: 2000 }]
     : [{ label: "250 gm", amount: 250 }, { label: "500 gm", amount: 500 }, { label: "1 kg", amount: 1000 }];
+  return choices.map((size) => ({ ...size, price: Math.max(1, Math.round(product.basePrice * size.amount / product.baseAmount)) }));
 }
 
 function indiaDateKey(value = new Date()) {
@@ -378,7 +398,7 @@ function calculateProductItems(inputItems) {
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
       return { error: "Each product quantity must be from 1 to 99." };
     }
-    const unitPrice = Math.max(1, Math.round((product.basePrice * size.amount) / product.baseAmount));
+    const unitPrice = Number.isInteger(size.price) ? size.price : Math.max(1, Math.round((product.basePrice * size.amount) / product.baseAmount));
     const lineTotal = unitPrice * quantity;
     total += lineTotal;
     result.push({ name: product.name, size: size.label, quantity, unitPrice, lineTotal, purchaseType });
@@ -405,7 +425,7 @@ function calculateSubscriptionItem(planId, productSubscription) {
     if (!Number.isInteger(day1Quantity) || day1Quantity < 1 || day1Quantity > 99) return { error: "Day 1 quantity must be from 1 to 99." };
     if (!Number.isInteger(day2Quantity) || day2Quantity < 0 || day2Quantity > 99) return { error: "Day 2 quantity must be from 0 to 99." };
 
-    const unitPrice = Math.max(1, Math.round((product.basePrice * size.amount) / product.baseAmount));
+    const unitPrice = Number.isInteger(size.price) ? size.price : Math.max(1, Math.round((product.basePrice * size.amount) / product.baseAmount));
     const schedule = { pattern, startDate, day1Quantity, day2Quantity: pattern === "alternate" ? day2Quantity : 0, durationDays: 30 };
     let totalQuantity = 0;
     let deliveryCount = 0;
@@ -1196,13 +1216,14 @@ async function start() {
     "id INTEGER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, name VARCHAR(120) NOT NULL, category VARCHAR(80) NOT NULL, " +
     "description VARCHAR(500) NOT NULL, price INTEGER NOT NULL CHECK (price > 0), base_amount INTEGER NOT NULL CHECK (base_amount > 0), " +
     "is_milk BOOLEAN NOT NULL DEFAULT FALSE, icon VARCHAR(16) NOT NULL DEFAULT '✦', tag VARCHAR(40) NOT NULL DEFAULT '', " +
-    "color VARCHAR(30) NOT NULL DEFAULT 'product', is_active BOOLEAN NOT NULL DEFAULT TRUE, " +
+    "color VARCHAR(30) NOT NULL DEFAULT 'product', pack_sizes JSONB NOT NULL DEFAULT '[]'::jsonb, is_active BOOLEAN NOT NULL DEFAULT TRUE, " +
     "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
   );
+  await pool.query("ALTER TABLE product_catalog ADD COLUMN IF NOT EXISTS pack_sizes JSONB NOT NULL DEFAULT '[]'::jsonb");
   for (const product of defaultProducts) {
     await pool.query(
-      "INSERT INTO product_catalog (id,name,category,description,price,base_amount,is_milk,icon,tag,color) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO NOTHING",
-      [product.id, product.name, product.category, product.detail, product.basePrice, product.baseAmount, product.milk, product.icon, product.tag, product.color],
+      "INSERT INTO product_catalog (id,name,category,description,price,base_amount,is_milk,icon,tag,color,pack_sizes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb) ON CONFLICT (id) DO NOTHING",
+      [product.id, product.name, product.category, product.detail, product.basePrice, product.baseAmount, product.milk, product.icon, product.tag, product.color, JSON.stringify(productSizeOptions(product).map((size) => ({ label: size.label, price: Math.max(1, Math.round(product.basePrice * size.amount / product.baseAmount)) })))],
     );
   }
   await pool.query("SELECT setval(pg_get_serial_sequence('product_catalog','id'), GREATEST(COALESCE((SELECT MAX(id) FROM product_catalog), 0), 1), EXISTS(SELECT 1 FROM product_catalog))");
