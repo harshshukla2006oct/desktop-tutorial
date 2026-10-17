@@ -68,6 +68,36 @@ function getProductSizes(product) {
   }));
 }
 
+function indiaDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+  const values = Object.fromEntries(parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return values.year + "-" + values.month + "-" + values.day;
+}
+
+function addDaysToDateKey(key, days) {
+  const date = new Date(key + "T00:00:00Z");
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function dateKeyDifference(from, to) {
+  return Math.round((Date.parse(to + "T00:00:00Z") - Date.parse(from + "T00:00:00Z")) / 86400000);
+}
+
+function estimateProductSubscription(product, sizeLabel, pattern, startDate, day1Quantity, day2Quantity) {
+  const size = getProductSizes(product).find((option) => option.label === sizeLabel);
+  if (!size || !startDate) return 0;
+  const today = indiaDateKey();
+  const end = addDaysToDateKey(today, 29);
+  let total = 0;
+  for (let date = startDate; date <= end; date = addDaysToDateKey(date, 1)) {
+    const offset = dateKeyDifference(startDate, date);
+    const quantity = pattern === "alternate" ? (offset % 2 === 0 ? day1Quantity : day2Quantity) : pattern === "weekly" ? (offset % 7 === 0 ? day1Quantity : 0) : day1Quantity;
+    total += size.price * quantity;
+  }
+  return total;
+}
+
 function App() {
   const [activeCategory, setActiveCategory] = useState("All products");
   const [search, setSearch] = useState("");
@@ -94,6 +124,12 @@ function App() {
     return requestedPage === "details" ? "details" : requestedPage === "plans" ? "plans" : "closed";
   });
   const [selectedPlan, setSelectedPlan] = useState(() => subscriptionPlans.find((plan) => plan.id === new URLSearchParams(window.location.search).get("plan")) || null);
+  const [productSubscription, setProductSubscription] = useState(null);
+  const [purchaseMode, setPurchaseMode] = useState("once");
+  const [deliveryPattern, setDeliveryPattern] = useState("daily");
+  const [subscriptionStartDate, setSubscriptionStartDate] = useState(() => indiaDateKey());
+  const [day1Quantity, setDay1Quantity] = useState(1);
+  const [day2Quantity, setDay2Quantity] = useState(0);
   const [showAccount, setShowAccount] = useState(() => window.location.pathname === "/customer" || new URLSearchParams(window.location.search).get("account") === "1");
   const [accountProfile, setAccountProfile] = useState(null);
 
@@ -131,14 +167,15 @@ function App() {
   const cartCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
   const cartTotal = cartItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
 
-  const addToCart = (product, size) => {
-    const key = `${product.id}-${size.label}`;
+  const addToCart = (product, size, purchaseType = "once") => {
+    const key = `${product.id}-${size.label}-${purchaseType}`;
     setCart((current) => ({
       ...current,
       [key]: {
         productId: product.id,
         size: size.label,
         unitPrice: size.price,
+        purchaseType,
         quantity: (current[key]?.quantity || 0) + 1,
       },
     }));
@@ -172,8 +209,17 @@ function App() {
       consent: customerConsent,
       paymentMethod,
       ...(orderType === "subscription"
-        ? { planId: selectedPlan?.id }
-        : { items: cartItems.map((item) => ({ productId: item.productId, size: item.size, quantity: item.quantity })) }),
+        ? productSubscription
+          ? { productSubscription: {
+              productId: productSubscription.productId,
+              size: productSubscription.size,
+              deliveryPattern: productSubscription.deliveryPattern,
+              startDate: productSubscription.startDate,
+              day1Quantity: productSubscription.day1Quantity,
+              day2Quantity: productSubscription.day2Quantity,
+            } }
+          : { planId: selectedPlan?.id }
+        : { items: cartItems.map((item) => ({ productId: item.productId, size: item.size, quantity: item.quantity, purchaseType: item.purchaseType })) }),
     };
     try {
       const response = await fetch("/api/orders", {
@@ -189,6 +235,8 @@ function App() {
       setCustomerConsent(false);
       setCheckoutStep("shop");
       setSubscriptionPage("closed");
+      setProductSubscription(null);
+      setSelectedPlan(null);
       if (orderType === "subscription" && accountProfile) {
         window.location.assign("/customer?subscription=updated");
         return;
@@ -235,8 +283,12 @@ function App() {
         address: current.address || profile.address || "",
         pin: current.pin || profile.pin || "",
       }));
-      setCheckoutAuthRequired(false);
-      setCheckoutStep("payment");
+      if (subscriptionPage === "account") {
+        setSubscriptionPage("payment");
+      } else {
+        setCheckoutAuthRequired(false);
+        setCheckoutStep("payment");
+      }
       window.scrollTo(0, 0);
     } catch (error) {
       setCheckoutAuthError(error.message || "We couldn’t complete that request. Please try again.");
@@ -248,6 +300,32 @@ function App() {
   const openSizePicker = (product) => {
     setSelectedProduct(product);
     setSelectedSize(getProductSizes(product)[0].label);
+    setPurchaseMode("once");
+    setDeliveryPattern("daily");
+    setSubscriptionStartDate(indiaDateKey());
+    setDay1Quantity(1);
+    setDay2Quantity(0);
+  };
+
+  const productSubscriptionEstimate = selectedProduct
+    ? estimateProductSubscription(selectedProduct, selectedSize, deliveryPattern, subscriptionStartDate, Number(day1Quantity) || 0, Number(day2Quantity) || 0)
+    : 0;
+
+  const beginProductSubscription = () => {
+    if (!selectedProduct) return;
+    setProductSubscription({
+      productId: selectedProduct.id,
+      size: selectedSize,
+      deliveryPattern,
+      startDate: subscriptionStartDate,
+      day1Quantity: Number(day1Quantity),
+      day2Quantity: deliveryPattern === "alternate" ? Number(day2Quantity) : 0,
+      estimatedTotal: productSubscriptionEstimate,
+    });
+    setSelectedPlan(null);
+    setSelectedProduct(null);
+    setSubscriptionPage("details");
+    window.scrollTo(0, 0);
   };
 
   if (showAccount) return <CustomerAccount onBack={() => setShowAccount(false)} />;
@@ -259,8 +337,13 @@ function App() {
           <a className="logo" href="#home" onClick={(event) => { event.preventDefault(); setSubscriptionPage("closed"); }}>
             <img className="logo-mark" src="/royal-hill-mark.svg" alt="" /><span>Royal Hill <b>Dairy</b></span>
           </a>
-          <button className="checkout-back" onClick={() => setSubscriptionPage(subscriptionPage === "payment" ? "details" : subscriptionPage === "details" ? "plans" : "closed")}>
-            ← {subscriptionPage === "payment" ? "Back to details" : subscriptionPage === "details" ? "Back to plans" : "Back to shop"}
+          <button className="checkout-back" onClick={() => {
+            if (subscriptionPage === "payment") setSubscriptionPage("details");
+            else if (subscriptionPage === "account") setSubscriptionPage("details");
+            else if (subscriptionPage === "details") setSubscriptionPage(productSubscription ? "closed" : "plans");
+            else setSubscriptionPage("closed");
+          }}>
+            ← {subscriptionPage === "payment" || subscriptionPage === "account" ? "Back to details" : subscriptionPage === "details" ? (productSubscription ? "Back to shop" : "Back to plans") : "Back to shop"}
           </button>
         </header>
 
@@ -278,7 +361,7 @@ function App() {
                   <div className="plan-price">₹{plan.price}<span> / {plan.period}</span></div>
                   <p>{plan.description}</p>
                   <ul>{plan.features.map((feature) => <li key={feature}>✓ &nbsp;{feature}</li>)}</ul>
-                  <button className="checkout-primary" onClick={() => { setSelectedPlan(plan); setSubscriptionPage("details"); window.scrollTo(0, 0); }}>
+                  <button className="checkout-primary" onClick={() => { setProductSubscription(null); setSelectedPlan(plan); setSubscriptionPage("details"); window.scrollTo(0, 0); }}>
                     Proceed to payment <span>→</span>
                   </button>
                 </article>
@@ -290,26 +373,53 @@ function App() {
             <p className="eyebrow">DELIVERY DETAILS</p>
             <h1>Where should we deliver?</h1>
             <p className="subscription-intro">Add your contact and address details for this subscription request.</p>
-            <form className="checkout-form subscription-details-form" onSubmit={(event) => { event.preventDefault(); setSubscriptionPage("payment"); window.scrollTo(0, 0); }}>
+            {productSubscription && (
+              <div className="subscription-config-summary">
+                <strong>{products.find((product) => product.id === productSubscription.productId)?.name} · {productSubscription.size}</strong>
+                <span>{productSubscription.deliveryPattern === "alternate" ? "Alternate-day" : productSubscription.deliveryPattern === "weekly" ? "Weekly" : "Daily"} delivery, starting {new Date(productSubscription.startDate + "T00:00:00").toLocaleDateString()} · Day 1 quantity {productSubscription.day1Quantity}{productSubscription.deliveryPattern === "alternate" ? " · Day 2 quantity " + productSubscription.day2Quantity : ""}</span>
+                <b>Estimated 30-day total: ₹{productSubscription.estimatedTotal}</b>
+              </div>
+            )}
+            <form className="checkout-form subscription-details-form" onSubmit={(event) => { event.preventDefault(); setSubscriptionPage(accountProfile ? "payment" : "account"); window.scrollTo(0, 0); }}>
               <label>Full name<input name="name" value={customer.name} onChange={updateCustomer} placeholder="Your name" autoComplete="name" required /></label>
               <label>Phone number<input name="phone" type="tel" inputMode="numeric" pattern="[0-9]{10}" maxLength="10" value={customer.phone} onChange={updateCustomer} placeholder="10-digit mobile number" autoComplete="tel" required /></label>
               <label className="full-field">Delivery address<textarea name="address" rows="3" value={customer.address} onChange={updateCustomer} placeholder="House / flat, street, area" autoComplete="street-address" required /></label>
               <label>PIN code<input name="pin" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" value={customer.pin} onChange={updateCustomer} placeholder="6-digit PIN code" autoComplete="postal-code" required /></label>
               <label className="full-field consent-row"><input type="checkbox" checked={customerConsent} onChange={(event) => setCustomerConsent(event.target.checked)} required /><span>I agree to send these details to Royal Hill Dairy to handle my order request.</span></label>
-              <button className="checkout-primary full-field" type="submit">Continue to payment <span>→</span></button>
+              <button className="checkout-primary full-field" type="submit" disabled={!accountSessionChecked}>{!accountSessionChecked ? "Checking account…" : accountProfile ? "Continue to payment" : "Continue to account"} <span>→</span></button>
+            </form>
+          </main>
+        ) : subscriptionPage === "account" ? (
+          <main className="subscription-content subscription-payment-page">
+            <p className="eyebrow">YOUR ROYAL HILL ACCOUNT</p>
+            <h1>{checkoutAuthMode === "register" ? "Create your account" : "Sign in to continue"}</h1>
+            <p className="subscription-intro">A customer account lets you manage your delivery schedule and view your subscription history.</p>
+            <div className="checkout-auth-switch" role="group" aria-label="Choose account action">
+              <button type="button" className={checkoutAuthMode === "register" ? "active" : ""} onClick={() => { setCheckoutAuthMode("register"); setCheckoutAuthError(""); }}>Create account</button>
+              <button type="button" className={checkoutAuthMode === "login" ? "active" : ""} onClick={() => { setCheckoutAuthMode("login"); setCheckoutAuthError(""); }}>Sign in</button>
+            </div>
+            <form className="checkout-auth-form subscription-account-form" onSubmit={continueCheckoutAuth}>
+              <label>Username<input name="username" autoComplete="username" autoCapitalize="none" maxLength="32" value={checkoutUsername} onChange={(event) => setCheckoutUsername(event.target.value)} placeholder="Choose a unique username" required /></label>
+              <label>Password<input name="password" type="password" autoComplete={checkoutAuthMode === "register" ? "new-password" : "current-password"} minLength="8" maxLength="128" value={checkoutPassword} onChange={(event) => setCheckoutPassword(event.target.value)} placeholder="At least 8 characters" required /></label>
+              {checkoutAuthMode === "register" && <label>Confirm password<input name="confirmPassword" type="password" autoComplete="new-password" minLength="8" maxLength="128" value={checkoutConfirmPassword} onChange={(event) => setCheckoutConfirmPassword(event.target.value)} placeholder="Enter your password again" required /></label>}
+              {checkoutAuthError && <p className="checkout-auth-error" role="alert">{checkoutAuthError}</p>}
+              <button className="checkout-primary" type="submit" disabled={checkoutAuthBusy}>{checkoutAuthBusy ? "Please wait…" : checkoutAuthMode === "register" ? "Create account and continue" : "Sign in and continue"} <span>→</span></button>
             </form>
           </main>
         ) : (
           <main className="subscription-content subscription-payment-page">
             <p className="eyebrow">SUBSCRIPTION CHECKOUT</p>
             <h1>Select a payment method</h1>
-            <p className="subscription-intro">Your selected plan is ready for payment.</p>
+            <p className="subscription-intro">{productSubscription ? "Review the recurring delivery details for this product." : "Your selected plan is ready for payment."}</p>
             <div className="subscription-payment-layout">
               <section className="subscription-payment-card">
                 <div className="selected-plan-summary">
-                  <span className="plan-icon">{selectedPlan?.icon}</span>
-                  <div><strong>{selectedPlan?.name}</strong><small>{selectedPlan?.period} subscription</small></div>
-                  <b>₹{selectedPlan?.price}</b>
+                  <span className="plan-icon">{productSubscription ? products.find((product) => product.id === productSubscription.productId)?.icon : selectedPlan?.icon}</span>
+                  <div>
+                    <strong>{productSubscription ? products.find((product) => product.id === productSubscription.productId)?.name : selectedPlan?.name}</strong>
+                    <small>{productSubscription ? (productSubscription.deliveryPattern === "alternate" ? "Alternate-day" : productSubscription.deliveryPattern === "weekly" ? "Weekly" : "Daily") + " · " + productSubscription.size + " · starts " + productSubscription.startDate : selectedPlan?.period + " subscription"}</small>
+                  </div>
+                  <b>₹{productSubscription ? productSubscription.estimatedTotal : selectedPlan?.price}</b>
                 </div>
                 <div className="payment-group-label">PAYMENT METHODS</div>
                 <div className="payment-options">
@@ -322,7 +432,7 @@ function App() {
                   ))}
                 </div>
                 <button className="checkout-primary subscription-pay-button" disabled={orderSubmitting} onClick={() => submitOrder("subscription")}>
-                  {orderSubmitting ? "Saving request…" : "Save subscription request · ₹" + selectedPlan?.price} <span>→</span>
+                  {orderSubmitting ? "Saving request…" : "Save subscription request · ₹" + (productSubscription ? productSubscription.estimatedTotal : selectedPlan?.price)} <span>→</span>
                 </button>
                 <p className="payment-demo-note">This saves your request for the dairy team. No payment is taken and delivery is not yet confirmed.</p>
               </section>
@@ -449,7 +559,7 @@ function App() {
               {cartItems.map((item) => (
                 <div className="summary-product" key={item.key}>
                   <span>{item.product.icon}</span>
-                  <div><strong>{item.product.name}</strong><small>{item.size} · Qty {item.quantity}</small></div>
+                  <div><strong>{item.product.name}</strong><small>{item.purchaseType === "trial" ? "Trial delivery · " : ""}{item.size} · Qty {item.quantity}</small></div>
                   <b>₹{item.unitPrice * item.quantity}</b>
                 </div>
               ))}
@@ -548,7 +658,7 @@ function App() {
                   {cartItems.map((item) => (
                     <div className="basket-item" key={item.key}>
                       <span className="basket-product-icon">{item.product.icon}</span>
-                      <div className="basket-product-info"><strong>{item.product.name}</strong><span>{item.size} · ₹{item.unitPrice}</span></div>
+                      <div className="basket-product-info"><strong>{item.product.name}</strong><span>{item.purchaseType === "trial" ? "Trial · one delivery" : "Buy once"} · {item.size} · ₹{item.unitPrice}</span></div>
                       <div className="quantity-control"><button onClick={() => changeQuantity(item.key, -1)} aria-label="Remove one">−</button><span>{item.quantity}</span><button onClick={() => changeQuantity(item.key, 1)} aria-label={item.quantity >= 99 ? "Maximum quantity reached" : "Add one"} disabled={item.quantity >= 99} title={item.quantity >= 99 ? "Maximum 99 per item" : undefined}>+</button></div>
                     </div>
                   ))}
@@ -566,7 +676,7 @@ function App() {
           <section className="size-modal" role="dialog" aria-modal="true" aria-labelledby="size-modal-title" onClick={(event) => event.stopPropagation()}>
             <button className="size-modal-close" onClick={() => setSelectedProduct(null)} aria-label="Close">×</button>
             <div className="size-modal-icon">{selectedProduct.icon}</div>
-            <p className="eyebrow">CHOOSE YOUR SIZE</p>
+            <p className="eyebrow">CHOOSE SIZE AND DELIVERY TYPE</p>
             <h2 id="size-modal-title">{selectedProduct.name}</h2>
             <div className="size-options">
               {getProductSizes(selectedProduct).map((size) => (
@@ -576,10 +686,41 @@ function App() {
                 </label>
               ))}
             </div>
-            <button className="checkout-primary size-add-button" onClick={() => {
+            <div className="purchase-mode-picker" role="group" aria-label="Choose purchase type">
+              {[["once", "Buy once"], ["trial", "Trial"], ["subscribe", "Subscribe"]].map(([mode, label]) => (
+                <button type="button" key={mode} className={purchaseMode === mode ? "active" : ""} onClick={() => setPurchaseMode(mode)}>{label}</button>
+              ))}
+            </div>
+            {purchaseMode === "trial" && <p className="purchase-mode-note">One standard-price delivery only. It will not repeat.</p>}
+            {purchaseMode === "subscribe" && (
+              <div className="product-subscription-controls">
+                <p className="product-subscription-title">Delivery pattern · 30 days from purchase</p>
+                <div className="delivery-pattern-options" role="group" aria-label="Delivery pattern">
+                  {[["daily", "Daily"], ["alternate", "Alternate day"], ["weekly", "Weekly"]].map(([pattern, label]) => (
+                    <button type="button" key={pattern} className={deliveryPattern === pattern ? "active" : ""} onClick={() => setDeliveryPattern(pattern)}>{label}</button>
+                  ))}
+                </div>
+                <label className="subscription-start-date">First delivery date
+                  <input type="date" min={indiaDateKey()} max={addDaysToDateKey(indiaDateKey(), 29)} value={subscriptionStartDate} onChange={(event) => setSubscriptionStartDate(event.target.value)} />
+                </label>
+                <div className="subscription-quantity-fields">
+                  <label>Day 1 quantity
+                    <input type="number" min="1" max="99" value={day1Quantity} onChange={(event) => setDay1Quantity(event.target.value)} />
+                  </label>
+                  {deliveryPattern === "alternate" && <label>Day 2 quantity
+                    <input type="number" min="0" max="99" value={day2Quantity} onChange={(event) => setDay2Quantity(event.target.value)} />
+                  </label>}
+                </div>
+                <p className="subscription-estimate">Estimated 30-day schedule total: <strong>₹{productSubscriptionEstimate}</strong></p>
+                <small className="purchase-mode-note">Delivery dates and quantities can be managed in your customer account. No online payment is taken.</small>
+              </div>
+            )}
+            <button className="checkout-primary size-add-button" disabled={purchaseMode === "subscribe" && (!subscriptionStartDate || Number(day1Quantity) < 1 || Number(day1Quantity) > 99 || (deliveryPattern === "alternate" && (Number(day2Quantity) < 0 || Number(day2Quantity) > 99)))} onClick={() => {
               const size = getProductSizes(selectedProduct).find((option) => option.label === selectedSize);
-              if (size) addToCart(selectedProduct, size);
-            }}>Add to basket</button>
+              if (!size) return;
+              if (purchaseMode === "subscribe") beginProductSubscription();
+              else addToCart(selectedProduct, size, purchaseMode === "trial" ? "trial" : "once");
+            }}>{purchaseMode === "subscribe" ? "Continue to subscription" : purchaseMode === "trial" ? "Add trial delivery" : "Add to basket"} <span>→</span></button>
           </section>
         </div>
       )}
