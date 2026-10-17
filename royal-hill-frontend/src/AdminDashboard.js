@@ -45,7 +45,7 @@ function AdminDashboard() {
   const [productCategory, setProductCategory] = useState("All categories");
   const [productFormOpen, setProductFormOpen] = useState(false);
   const [editingProductId, setEditingProductId] = useState(null);
-  const [productDraft, setProductDraft] = useState({ name: "", category: "", detail: "", price: "", icon: "✦", tag: "" });
+  const [productDraft, setProductDraft] = useState({ name: "", category: "", detail: "", icon: "✦", tag: "", packSizes: [{ label: "1 pack", price: "" }] });
   const [productSaving, setProductSaving] = useState(false);
   const [productError, setProductError] = useState("");
   const [entries, setEntries] = useState([]);
@@ -229,16 +229,31 @@ function AdminDashboard() {
 
   const startCreateProduct = () => {
     setEditingProductId(null);
-    setProductDraft({ name: "", category: "", detail: "", price: "", icon: "✦", tag: "" });
+    setProductDraft({ name: "", category: "", detail: "", icon: "✦", tag: "", packSizes: [{ label: "1 pack", price: "" }] });
     setProductError("");
     setProductFormOpen(true);
   };
 
   const startEditProduct = (product) => {
     setEditingProductId(product.id);
-    setProductDraft({ name: product.name, category: product.category, detail: product.detail, price: String(product.price), icon: product.icon || "✦", tag: product.tag || "" });
+    setProductDraft({ name: product.name, category: product.category, detail: product.detail, icon: product.icon || "✦", tag: product.tag || "", packSizes: (product.packSizes || []).map((pack) => ({ label: pack.label, price: String(pack.price) })) });
     setProductError("");
     setProductFormOpen(true);
+  };
+
+  const updateProductPack = (index, field, value) => {
+    setProductDraft((draft) => ({
+      ...draft,
+      packSizes: draft.packSizes.map((pack, packIndex) => packIndex === index ? { ...pack, [field]: value } : pack),
+    }));
+  };
+
+  const addProductPack = () => {
+    setProductDraft((draft) => ({ ...draft, packSizes: [...draft.packSizes, { label: "", price: "" }] }));
+  };
+
+  const removeProductPack = (index) => {
+    setProductDraft((draft) => ({ ...draft, packSizes: draft.packSizes.filter((_, packIndex) => packIndex !== index) }));
   };
 
   const saveProduct = async (event) => {
@@ -249,7 +264,7 @@ function AdminDashboard() {
       const response = await fetch(editingProductId ? "/api/admin/products/" + editingProductId : "/api/admin/products", {
         method: editingProductId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...productDraft, price: Number(productDraft.price) }),
+        body: JSON.stringify({ ...productDraft, price: Number(productDraft.packSizes[0]?.price), packSizes: productDraft.packSizes.map((pack) => ({ label: pack.label, price: Number(pack.price) })) }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "The product could not be saved.");
@@ -718,13 +733,30 @@ function AdminDashboard() {
               <p className="admin-intro">Changes save to your shop catalog and appear on the storefront.</p>
               <form onSubmit={saveProduct}>
                 <div className="admin-product-form-grid">
-                  <label>Product name<input maxLength="120" value={productDraft.name} onChange={(event) => setProductDraft({ ...productDraft, name: event.target.value })} required placeholder="e.g. Farm fresh yogurt" /></label>
-                  <label>Category<input maxLength="80" list="admin-product-categories" value={productDraft.category} onChange={(event) => setProductDraft({ ...productDraft, category: event.target.value })} required placeholder="Choose or enter a category" /></label>
-                  <datalist id="admin-product-categories">{productCategories.map((category) => <option key={category} value={category} />)}</datalist>
-                  <label>Price (₹)<input type="number" min="1" max="1000000" step="1" value={productDraft.price} onChange={(event) => setProductDraft({ ...productDraft, price: event.target.value })} required placeholder="e.g. 120" /></label>
-                  <label>Pack size / description<input maxLength="500" value={productDraft.detail} onChange={(event) => setProductDraft({ ...productDraft, detail: event.target.value })} required placeholder="e.g. Fresh and creamy · 500 g" /></label>
-                  <label>Product icon (optional)<input maxLength="16" value={productDraft.icon} onChange={(event) => setProductDraft({ ...productDraft, icon: event.target.value })} placeholder="🥛" /></label>
-                  <label>Short label (optional)<input maxLength="40" value={productDraft.tag} onChange={(event) => setProductDraft({ ...productDraft, tag: event.target.value })} placeholder="FARM FRESH" /></label>
+                  <section className="admin-product-info-panel">
+                    <div className="admin-form-section-title"><span>01</span><div><strong>Product details</strong><small>Name, category, and the description customers see.</small></div></div>
+                    <div className="admin-product-info-fields">
+                      <label>Product name<input maxLength="120" value={productDraft.name} onChange={(event) => setProductDraft({ ...productDraft, name: event.target.value })} required placeholder="e.g. Farm fresh yogurt" /></label>
+                      <label>Category<input maxLength="80" list="admin-product-categories" value={productDraft.category} onChange={(event) => setProductDraft({ ...productDraft, category: event.target.value })} required placeholder="Choose or enter a category" /></label>
+                      <datalist id="admin-product-categories">{productCategories.map((category) => <option key={category} value={category} />)}</datalist>
+                      <label className="wide-field">Description and pack information<input maxLength="500" value={productDraft.detail} onChange={(event) => setProductDraft({ ...productDraft, detail: event.target.value })} required placeholder="e.g. Fresh and creamy · 500 g" /></label>
+                      <label>Product icon<input maxLength="16" value={productDraft.icon} onChange={(event) => setProductDraft({ ...productDraft, icon: event.target.value })} placeholder="🥛" /></label>
+                      <label>Short label<input maxLength="40" value={productDraft.tag} onChange={(event) => setProductDraft({ ...productDraft, tag: event.target.value })} placeholder="FARM FRESH" /></label>
+                    </div>
+                  </section>
+                  <section className="admin-pack-editor">
+                    <div className="admin-form-section-title"><span>02</span><div><strong>Pack sizes &amp; prices</strong><small>Set the exact price customers pay for each size.</small></div></div>
+                    <div className="admin-pack-list">
+                      {productDraft.packSizes.map((pack, index) => (
+                        <div className="admin-pack-row" key={index}>
+                          <label>Pack size<input maxLength="32" value={pack.label} onChange={(event) => updateProductPack(index, "label", event.target.value)} required placeholder="e.g. 500 ml" /></label>
+                          <label>Price (₹)<input type="number" min="1" max="1000000" step="1" value={pack.price} onChange={(event) => updateProductPack(index, "price", event.target.value)} required placeholder="e.g. 80" /></label>
+                          <button type="button" className="admin-pack-remove" aria-label={"Remove pack size " + (index + 1)} disabled={productDraft.packSizes.length <= 1} onClick={() => removeProductPack(index)}>×</button>
+                        </div>
+                      ))}
+                    </div>
+                    <button type="button" className="admin-add-pack" disabled={productDraft.packSizes.length >= 12} onClick={addProductPack}>＋ Add another pack size</button>
+                  </section>
                 </div>
                 {productError && <p className="admin-error" role="alert">{productError}</p>}
                 <div className="admin-modal-actions">
