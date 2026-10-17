@@ -243,3 +243,16 @@
  .admin-pack-row { grid-template-columns:minmax(0,1fr) minmax(95px,.7fr) 34px; gap:7px; padding:9px; }
  .admin-pack-remove { width:34px; }
 }
+
+.admin-stock-badge { display:inline-flex; align-items:center; margin-top:9px; padding:5px 9px; border-radius:999px; font-size:11px; font-weight:800; }
+.admin-stock-badge.in { color:#17734f; background:#eaf8f1; }
+.admin-stock-badge.out { color:#a23232; background:#fff0ef; }
+.admin-product-actions button.stock-toggle { margin-right:auto; border-color:#b9ddca; background:#effaf4; color:#19744f; }
+.admin-product-actions button.stock-toggle.mark-out { border-color:#f1d4d4; background:#fff7f6; color:#a23232; }
+.admin-product-actions button.stock-toggle.restock { border-color:#b9ddca; background:#effaf4; color:#19744f; }
+.admin-product-actions button.stock-toggle:disabled { opacity:.55; cursor:wait; }
+.admin-stock-checkbox { display:flex !important; align-items:flex-start; gap:11px !important; padding:12px 14px; border:1px solid #dce8f3; border-radius:12px; background:#fff; cursor:pointer; }
+.admin-stock-checkbox input { width:18px; min-height:18px; margin:1px 0 0; accent-color:#2367b5; }
+.admin-stock-checkbox span { display:grid; gap:3px; }
+.admin-stock-checkbox strong { color:#23445f; font-size:13px; }
+.admin-stock-checkbox small { color:#71879d; font-size:11px; font-weight:500; }
