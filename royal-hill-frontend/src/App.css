@@ -418,3 +418,25 @@ button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,
   .checkout-auth-switch { width: 100%; }
   .checkout-auth-switch button { flex: 1; }
 }
+
+
+/* Product purchase and recurring delivery choices */
+.size-modal { max-height: calc(100vh - 32px); overflow-y: auto; }
+.purchase-mode-picker,.delivery-pattern-options { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; margin: 18px 0 12px; }
+.purchase-mode-picker button,.delivery-pattern-options button { border: 1px solid #c7d8e9; border-radius: 12px; background: #fff; color: var(--ink); padding: 11px 8px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; transition: background .18s ease,color .18s ease,border-color .18s ease,transform .18s ease; }
+.purchase-mode-picker button:hover,.delivery-pattern-options button:hover { transform: translateY(-1px); border-color: var(--blue); }
+.purchase-mode-picker button.active,.delivery-pattern-options button.active { background: var(--deep-blue); border-color: var(--deep-blue); color: #fff; }
+.purchase-mode-note { display: block; margin: 8px 0 14px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.product-subscription-controls { margin: 14px 0 18px; padding: 16px; border: 1px solid #dbe9f7; border-radius: 16px; background: linear-gradient(135deg,#f4f9ff,#fff); }
+.product-subscription-title { margin: 0 0 10px; font-weight: 700; font-size: 14px; color: var(--deep-blue); }
+.product-subscription-controls .delivery-pattern-options { margin: 0 0 14px; }
+.subscription-start-date,.subscription-quantity-fields label { display: grid; gap: 6px; color: var(--ink); font-size: 12px; font-weight: 700; }
+.subscription-start-date input,.subscription-quantity-fields input { width: 100%; min-height: 42px; border: 1px solid #c7d8e9; border-radius: 10px; background: #fff; color: var(--ink); padding: 8px 10px; font: inherit; }
+.subscription-quantity-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 12px; }
+.subscription-estimate { margin: 14px 0 4px; color: var(--muted); font-size: 13px; }
+.subscription-estimate strong { color: var(--deep-blue); font-size: 16px; }
+@media(max-width:520px) {
+ .purchase-mode-picker,.delivery-pattern-options { gap: 5px; }
+ .purchase-mode-picker button,.delivery-pattern-options button { padding: 10px 4px; font-size: 11px; }
+ .product-subscription-controls { padding: 12px; }
+}
